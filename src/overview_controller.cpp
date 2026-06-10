@@ -5909,8 +5909,19 @@ std::string OverviewController::activeWorkspaceNameForSwipe() const {
 }
 
 void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& beginName, double rawTravel, double lastFrame, bool cancelled) {
-    if (cancelled || beginName.empty() || !m_changeWorkspaceOriginal)
-        return;
+    const bool log = debugLogsEnabled();
+    const auto bail = [&](const char* why) {
+        if (log) {
+            std::ostringstream out;
+            out << "[hymission] native swipe boundary bail (" << why << ") begin='" << beginName << "' rawTravel=" << rawTravel
+                << " lastFrame=" << lastFrame << " cancelled=" << (cancelled ? 1 : 0);
+            debugLog(out.str());
+        }
+    };
+
+    if (cancelled) { bail("cancelled"); return; }
+    if (beginName.empty()) { bail("no begin name"); return; }
+    if (!g_pKeybindManager || !g_pKeybindManager->m_dispatchers.contains("workspace")) { bail("no dispatcher"); return; }
 
     // Only numerically-named workspaces participate (matches hypr-workspace-nav).
     const auto parseSigned = [](const std::string& name, long& out) -> bool {
@@ -5932,16 +5943,16 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
     if (!parseSigned(beginName, current))
         return;
 
-    double travel = rawTravel;
-    if (workspaceSwipeInvertEnabled())
-        travel = -travel;
-    if (std::abs(travel) < 0.0001)
-        return;
-    const int step = travel < 0.0 ? -1 : 1;
+    if (std::abs(rawTravel) < 0.0001) { bail("no travel"); return; }
+    // The native swipe (workspace_swipe_use_r) can always create higher positive
+    // workspaces, so it only gets "stuck" at the positive lower edge -> a stuck
+    // swipe from a positive workspace unambiguously means "go lower". On named
+    // 0/negative workspaces, use the travel sign (observed: lower == positive travel).
+    const int step = (current >= 1) ? -1 : (rawTravel > 0.0 ? -1 : 1);
 
     const double commitDistanceThreshold = overviewWorkspaceSwipeCommitDistance();
     const double speedThreshold = gestureForceSpeedThreshold();
-    const bool   distanceCommit = std::abs(travel) >= commitDistanceThreshold;
+    const bool   distanceCommit = std::abs(rawTravel) >= commitDistanceThreshold;
     const bool   speedCommit = speedThreshold > 0.0 && std::abs(lastFrame) >= speedThreshold && distanceCommit;
     if (!distanceCommit && !speedCommit)
         return;
@@ -5965,7 +5976,7 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
             << " rawTravel=" << rawTravel;
         debugLog(out.str());
     }
-    m_changeWorkspaceOriginal(targetArg);
+    g_pKeybindManager->m_dispatchers.at("workspace")(targetArg);
 }
 
 void OverviewController::updateOverviewWorkspaceTransition() {
