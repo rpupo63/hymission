@@ -6848,7 +6848,39 @@ bool OverviewController::shouldSyncRealFocusDuringOverview() const {
 }
 
 bool OverviewController::insideRenderLifecycle() const {
-    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprOpenGL && g_pHyprRenderer->m_renderData.pMonitor);
+    return isInsideActiveRenderPass();
+}
+
+bool OverviewController::isInsideLiveMonitorRenderPass() const {
+    return m_surfaceRenderDataTransformDepth > 0;
+}
+
+bool OverviewController::isInsideActiveRenderPass() const {
+    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0;
+}
+
+bool OverviewController::inStripSnapshotRender() const {
+    return m_stripSnapshotRenderDepth > 0;
+}
+
+bool OverviewController::hasStripPreviewWindow(const PHLWINDOW& window) const {
+    return m_stripPreviewContext.active && managedWindowFor(m_stripPreviewContext.state, window, true) != nullptr;
+}
+
+bool OverviewController::overviewRenderActiveForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
+    if (!window || !monitor)
+        return false;
+
+    if (inStripSnapshotRender()) {
+        if (!m_stripPreviewContext.active || m_stripPreviewContext.monitor != monitor)
+            return false;
+        return hasStripPreviewWindow(window);
+    }
+
+    if (!shouldUseOverviewRenderOverrides())
+        return false;
+
+    return ownsMonitor(monitor) && hasManagedWindow(window);
 }
 
 bool OverviewController::ownsMonitor(const PHLMONITOR& monitor) const {
@@ -7689,6 +7721,34 @@ bool OverviewController::transformSurfaceRenderDataForWindow(const PHLWINDOW& wi
 
     // Keep overview previews independent from normal-layout monitor clipping.
     renderData.clipBox = {};
+
+    if (m_stripPreviewContext.active) {
+        const Rect contentLocal = overviewContentRectForMonitor(monitor, m_stripPreviewContext.state);
+        if (contentLocal.width > 1.0 && contentLocal.height > 1.0) {
+            const Rect contentGlobal = makeRect(monitor->m_position.x + contentLocal.x, monitor->m_position.y + contentLocal.y, contentLocal.width, contentLocal.height);
+            const Vector2D fbSize = m_stripPreviewContext.framebufferSize;
+            const double   scale = std::min(fbSize.x / contentGlobal.width, fbSize.y / contentGlobal.height);
+            const double   mappedW = contentGlobal.width * scale;
+            const double   mappedH = contentGlobal.height * scale;
+            const double   offsetX = (fbSize.x - mappedW) * 0.5;
+            const double   offsetY = (fbSize.y - mappedH) * 0.5;
+
+            const Vector2D effectiveOrigin = renderData.pos + renderData.localPos;
+            const Vector2D mappedOrigin = Vector2D{offsetX + (effectiveOrigin.x - contentGlobal.x) * scale,
+                                                   offsetY + (effectiveOrigin.y - contentGlobal.y) * scale};
+            const Vector2D mappedLocal = Vector2D{renderData.localPos.x * scale, renderData.localPos.y * scale};
+
+            renderData.pos = (mappedOrigin - mappedLocal) + monitor->m_position;
+            renderData.localPos = mappedLocal;
+            renderData.w = std::max(1.0, renderData.w * scale);
+            renderData.h = std::max(1.0, renderData.h * scale);
+            if (renderData.rounding > 0) {
+                renderData.rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(renderData.rounding) * scale)));
+                renderData.dontRound = renderData.rounding <= 0;
+            }
+        }
+    }
+
 
     return true;
 }
