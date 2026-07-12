@@ -81,7 +81,6 @@ class OverviewController {
     [[nodiscard]] bool            blocksWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
     void                          updateOverviewWorkspaceSwipeGesture(double delta);
-    void                          setOverviewWorkspaceSwipeGestureDelta(double delta);
     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
     // Active workspace name on the monitor under the cursor, for native-swipe boundary handoff.
     [[nodiscard]] std::string     activeWorkspaceNameForSwipe() const;
@@ -631,6 +630,10 @@ class OverviewController {
                                                                bool syntheticEmpty, WorkspaceTransitionMode mode);
     [[nodiscard]] bool         beginExternalOverviewWorkspaceTransition(const PHLWORKSPACE& workspace);
     [[nodiscard]] bool         startOverviewWorkspaceTransitionByStep(const PHLMONITOR& monitor, int step, WorkspaceTransitionMode mode);
+    [[nodiscard]] bool         beginOverviewWorkspaceSwipeTransitionForStep(int step);
+    void                       syncOverviewWorkspaceSwipeGestureTransitionDelta();
+    void                       finishOverviewWorkspaceSwipeGestureTransition(bool commit);
+    void                       updateOverviewWorkspaceSwipeGestureFromGestureDistance(float frameDistance);
     void                       updateOverviewWorkspaceTransition();
     void                       requestOverviewWorkspaceTransitionCommit(bool followGesture = false);
     void                       commitOverviewWorkspaceTransition(bool followGesture = false);
@@ -710,7 +713,6 @@ class OverviewController {
     void                       clearPendingWindowGeometryRetry();
     void                       scheduleVisibleStateRebuild();
     void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action, bool allowExternalTransition = false);
-    void                       updateOverviewWorkspaceSwipeGestureAdjusted(double delta, bool absolute);
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
     void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;

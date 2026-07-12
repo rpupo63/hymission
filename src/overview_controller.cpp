@@ -3777,10 +3777,8 @@ void OverviewController::unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, d
     if (!m_unifiedWorkspaceSwipeUpdateOriginal)
         return;
 
-    if (m_workspaceSwipeGesture.active) {
-        setOverviewWorkspaceSwipeGestureDelta(delta);
+    if (m_workspaceSwipeGesture.active)
         return;
-    }
 
     if (shouldBlockWorkspaceSwitchInOverview() || allowsWorkspaceSwitchInOverview())
         return;
@@ -3867,7 +3865,7 @@ bool OverviewController::handleTouchMotion(const ITouch::SMotionEvent& event) {
     else
         adjustedDelta = gestureDistance * (touchInvert ? primary : -primary);
 
-    setOverviewWorkspaceSwipeGestureDelta(adjustedDelta);
+    updateOverviewWorkspaceSwipeGesture(adjustedDelta - m_workspaceSwipeGesture.rawTravel);
     return true;
 }
 
@@ -5806,58 +5804,150 @@ bool OverviewController::startOverviewWorkspaceTransitionByStep(const PHLMONITOR
     return true;
 }
 
-void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
-    updateOverviewWorkspaceSwipeGestureAdjusted(workspaceSwipeInvertEnabled() ? -delta : delta, false);
+bool OverviewController::beginOverviewWorkspaceSwipeTransitionForStep(int step) {
+    if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor || step == 0)
+        return false;
+
+    if (m_workspaceTransition.active) {
+        if (m_workspaceTransition.mode != WorkspaceTransitionMode::Gesture || m_workspaceTransition.step != (step < 0 ? -1 : 1))
+            return false;
+        return true;
+    }
+
+    const auto& monitor = m_workspaceSwipeGesture.monitor;
+
+    if (const auto currentIndex = stripIndexForOwnerWorkspace()) {
+        const int targetIndex = static_cast<int>(*currentIndex) + step;
+        if (targetIndex >= 0 && static_cast<std::size_t>(targetIndex) < m_state.stripEntries.size()) {
+            const auto& entry = m_state.stripEntries[static_cast<std::size_t>(targetIndex)];
+            if (entry.monitor && entry.workspaceId != WORKSPACE_INVALID) {
+                auto targetWorkspace = entry.workspace ? entry.workspace : ::State::workspaceState()->query().id(entry.workspaceId).run();
+                if (!targetWorkspace || !targetWorkspace->m_isSpecialWorkspace) {
+                    if (targetWorkspace && entry.monitor->m_activeWorkspace == targetWorkspace)
+                        return false;
+
+                    const std::string targetName = entry.workspaceName.empty() ? std::to_string(entry.workspaceId) : entry.workspaceName;
+                    const bool        syntheticTarget = !targetWorkspace && (entry.syntheticEmpty || entry.newWorkspaceSlot);
+                    if (beginOverviewWorkspaceTransition(entry.monitor, entry.workspaceId, targetName, targetWorkspace, syntheticTarget, WorkspaceTransitionMode::Gesture)) {
+                        m_workspaceTransition.step = step < 0 ? -1 : 1;
+                        if (debugLogsEnabled()) {
+                            std::ostringstream out;
+                            out << "[hymission] overview workspace swipe gesture transition via strip index=" << targetIndex << " step=" << step;
+                            debugLog(out.str());
+                        }
+                        enforceOverviewWorkspaceVisibility();
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!startOverviewWorkspaceTransitionByStep(monitor, step, WorkspaceTransitionMode::Gesture))
+        return false;
+
+    enforceOverviewWorkspaceVisibility();
+    return true;
 }
 
-void OverviewController::setOverviewWorkspaceSwipeGestureDelta(double delta) {
-    updateOverviewWorkspaceSwipeGestureAdjusted(delta, true);
-}
-
-void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delta, bool absolute) {
-    if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor)
+void OverviewController::syncOverviewWorkspaceSwipeGestureTransitionDelta() {
+    if (!m_workspaceSwipeGesture.active || !m_workspaceTransition.active || m_workspaceTransition.mode != WorkspaceTransitionMode::Gesture)
         return;
 
-    const double candidateTotal = absolute ? delta : m_workspaceSwipeGesture.gestureDelta + delta;
-    if (std::abs(candidateTotal) < 0.0001) {
-        m_workspaceSwipeGesture.gestureDelta = 0.0;
-        if (m_workspaceTransition.active) {
-            m_workspaceTransition.delta = 0.0;
+    const double travelDistance = std::max(1.0, gestureSwipeDistance());
+    const double distance = std::max(1.0, m_workspaceTransition.distance);
+    const double visual = (m_workspaceSwipeGesture.rawTravel / travelDistance) * distance;
+    if (m_workspaceTransition.step > 0)
+        m_workspaceTransition.delta = std::clamp(visual, 0.0, distance);
+    else
+        m_workspaceTransition.delta = std::clamp(visual, -distance, 0.0);
+
+    damageOwnedMonitors();
+}
+
+void OverviewController::finishOverviewWorkspaceSwipeGestureTransition(bool commit) {
+    if (!m_workspaceTransition.active || m_workspaceTransition.mode != WorkspaceTransitionMode::Gesture)
+        return;
+
+    const double distance = std::max(1.0, m_workspaceTransition.distance);
+    const double targetDelta = commit ? static_cast<double>(m_workspaceTransition.step) * distance : 0.0;
+
+    if (std::abs(m_workspaceTransition.delta - targetDelta) < 1.0) {
+        if (commit)
+            requestOverviewWorkspaceTransitionCommit(true);
+        else {
+            clearOverviewWorkspaceTransition();
+            applyOverviewWorkspaceVisibilitySuppression();
+            enforceOverviewWorkspaceVisibility();
+            updateHoveredFromPointer(false, false, false, false, "workspace-transition-gesture-cancel");
             damageOwnedMonitors();
         }
         return;
     }
 
-    const int intendedStep = candidateTotal < 0.0 ? -1 : 1;
-    if (!m_workspaceTransition.active || m_workspaceTransition.step != intendedStep) {
-        if (!startOverviewWorkspaceTransitionByStep(m_workspaceSwipeGesture.monitor, intendedStep, WorkspaceTransitionMode::Gesture))
-            return;
+    m_workspaceTransition.mode = commit ? WorkspaceTransitionMode::TimedCommit : WorkspaceTransitionMode::TimedRevert;
+    m_workspaceTransition.animationFromDelta = m_workspaceTransition.delta;
+    m_workspaceTransition.animationToDelta = targetDelta;
+    m_workspaceTransition.animationProgress = 0.0;
+    m_workspaceTransition.animationStart = {};
+    damageOwnedMonitors();
+}
+
+void OverviewController::updateOverviewWorkspaceSwipeGestureFromGestureDistance(float frameDistance) {
+    if (!m_workspaceSwipeGesture.active)
+        return;
+
+    updateOverviewWorkspaceSwipeGesture(static_cast<double>(frameDistance));
+}
+
+void OverviewController::updateOverviewWorkspaceSwipeGesture(double frameDistance) {
+    if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor)
+        return;
+
+    const double travelDistance = std::max(1.0, gestureSwipeDistance());
+    const auto   frame = computeOverviewWorkspaceSwipeFrame({
+        .frameDistance = frameDistance,
+        .invert = workspaceSwipeInvertEnabled(),
+        .deltaScale = m_workspaceSwipeGesture.deltaScale,
+        .maxStepFraction = overviewWorkspaceSwipeMaxStepFraction(),
+        .travelDistance = travelDistance,
+        .currentTotal = m_workspaceSwipeGesture.rawTravel,
+    });
+
+    if (std::abs(frame.clampedStep) < 0.0001)
+        return;
+
+    m_workspaceSwipeGesture.rawTravel = frame.nextTotal;
+    m_workspaceSwipeGesture.lastFrameDelta = frame.clampedStep;
+
+    const int frameStep = frame.clampedStep < 0.0 ? -1 : 1;
+    if (m_workspaceSwipeGesture.lockedStep == 0) {
+        if (!gestureSwipeDirectionLockEnabled() || std::abs(m_workspaceSwipeGesture.rawTravel) > gestureSwipeDirectionLockThreshold())
+            m_workspaceSwipeGesture.lockedStep = frameStep;
     }
 
-    double nextGestureDelta = candidateTotal;
-    if (gestureSwipeDirectionLockEnabled()) {
-        if (m_workspaceTransition.initialDirection != 0 && m_workspaceTransition.initialDirection != (nextGestureDelta < 0.0 ? -1 : 1)) {
-            nextGestureDelta = 0.0;
-        } else if (m_workspaceTransition.initialDirection == 0 && std::abs(nextGestureDelta) > gestureSwipeDirectionLockThreshold()) {
-            m_workspaceTransition.initialDirection = nextGestureDelta < 0.0 ? -1 : 1;
+    if (m_workspaceSwipeGesture.lockedStep == 0)
+        return;
+
+    if (!m_workspaceTransition.active) {
+        if (!beginOverviewWorkspaceSwipeTransitionForStep(m_workspaceSwipeGesture.lockedStep)) {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] overview workspace swipe gesture transition unavailable step=" << m_workspaceSwipeGesture.lockedStep
+                    << " rawTravel=" << m_workspaceSwipeGesture.rawTravel;
+                debugLog(out.str());
+            }
+            return;
         }
     }
 
-    const double gestureDistance = gestureSwipeDistance();
-    nextGestureDelta = std::clamp(nextGestureDelta, -gestureDistance, gestureDistance);
-
-    const double previousDelta = m_workspaceTransition.delta;
-    m_workspaceSwipeGesture.gestureDelta = nextGestureDelta;
-    m_workspaceTransition.delta = (nextGestureDelta / gestureDistance) * m_workspaceTransition.distance;
-    const double deltaStep = std::abs(previousDelta - m_workspaceTransition.delta);
-    m_workspaceTransition.avgSpeed = (m_workspaceTransition.avgSpeed * static_cast<double>(m_workspaceTransition.speedPoints) + deltaStep) /
-        static_cast<double>(m_workspaceTransition.speedPoints + 1);
-    ++m_workspaceTransition.speedPoints;
+    syncOverviewWorkspaceSwipeGestureTransitionDelta();
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] overview workspace swipe update gestureDelta=" << m_workspaceSwipeGesture.gestureDelta
-            << " visualDelta=" << m_workspaceTransition.delta << " avgSpeed=" << m_workspaceTransition.avgSpeed << " step=" << m_workspaceTransition.step;
+        out << "[hymission] overview workspace swipe track rawTravel=" << m_workspaceSwipeGesture.rawTravel
+            << " lockedStep=" << m_workspaceSwipeGesture.lockedStep << " delta=" << m_workspaceTransition.delta
+            << " transition=" << (m_workspaceTransition.active ? 1 : 0);
         debugLog(out.str());
     }
 
@@ -5868,37 +5958,41 @@ void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delt
 }
 
 void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
-    const double gestureDelta = m_workspaceSwipeGesture.gestureDelta;
-    const bool touchActive = m_workspaceSwipeGesture.touchActive;
+    clearStripWindowDragState();
+
+    const double rawTravel = m_workspaceSwipeGesture.rawTravel;
+    const double lastFrameDelta = m_workspaceSwipeGesture.lastFrameDelta;
+    const int    lockedStep = m_workspaceSwipeGesture.lockedStep;
+    const bool   gestureTransitionActive =
+        m_workspaceTransition.active && m_workspaceTransition.mode == WorkspaceTransitionMode::Gesture && m_workspaceTransition.fromOverviewSwipe;
     m_workspaceSwipeGesture = {};
 
-    if (!m_workspaceTransition.active)
-        return;
-
-    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5), 0.0, 1.0);
-    const double gestureDistance = gestureSwipeDistance();
+    const bool sameDirection = lockedStep != 0 && ((lockedStep > 0 && rawTravel > 0.0) || (lockedStep < 0 && rawTravel < 0.0));
     const double speedThreshold = gestureForceSpeedThreshold();
-    const double visualSpeedThreshold = speedThreshold * (m_workspaceTransition.distance / gestureDistance);
-    const bool revert =
-        cancelled || ((std::abs(gestureDelta) < gestureDistance * cancelRatio &&
-                       (speedThreshold == 0.0 || m_workspaceTransition.avgSpeed < visualSpeedThreshold)) ||
-                      std::abs(gestureDelta) < 2.0);
-
-    m_workspaceTransition.mode = revert ? WorkspaceTransitionMode::TimedRevert : WorkspaceTransitionMode::TimedCommit;
-    m_workspaceTransition.animationFromDelta = m_workspaceTransition.delta;
-    m_workspaceTransition.animationToDelta = revert ? 0.0 : static_cast<double>(m_workspaceTransition.step) * m_workspaceTransition.distance;
-    m_workspaceTransition.animationProgress = 0.0;
-    m_workspaceTransition.animationStart = {};
+    const double commitDistanceThreshold = overviewWorkspaceSwipeCommitDistance();
+    const bool   distanceCommit = std::abs(rawTravel) >= commitDistanceThreshold;
+    const bool   speedCommit = speedThreshold > 0.0 && std::abs(lastFrameDelta) >= speedThreshold && distanceCommit;
+    const bool   commit = !cancelled && sameDirection && (distanceCommit || speedCommit);
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] overview workspace swipe end cancelled=" << (cancelled ? 1 : 0) << " revert=" << (revert ? 1 : 0)
-            << " touch=" << (touchActive ? 1 : 0) << " gestureDelta=" << gestureDelta << " visualDelta=" << m_workspaceTransition.delta
-            << " avgSpeed=" << m_workspaceTransition.avgSpeed;
+        out << "[hymission] overview workspace swipe end cancelled=" << (cancelled ? 1 : 0) << " commit=" << (commit ? 1 : 0)
+            << " lockedStep=" << lockedStep << " rawTravel=" << rawTravel << " commitDistanceThreshold=" << commitDistanceThreshold
+            << " distanceCommit=" << (distanceCommit ? 1 : 0) << " speedCommit=" << (speedCommit ? 1 : 0)
+            << " sameDirection=" << (sameDirection ? 1 : 0) << " lastFrameDelta=" << lastFrameDelta
+            << " gestureTransition=" << (gestureTransitionActive ? 1 : 0);
         debugLog(out.str());
     }
 
-    damageOwnedMonitors();
+    if (gestureTransitionActive) {
+        finishOverviewWorkspaceSwipeGestureTransition(commit);
+        return;
+    }
+
+    if (!commit)
+        return;
+
+    activateStripTargetByStep(lockedStep);
 }
 
 std::string OverviewController::activeWorkspaceNameForSwipe() const {
@@ -6067,6 +6161,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     const bool targetWorkspaceSyntheticEmpty = m_workspaceTransition.targetWorkspaceSyntheticEmpty;
     const auto targetWorkspaceName = m_workspaceTransition.targetWorkspaceName;
     State      next = m_workspaceTransition.targetState;
+    const auto rebuildMonitor = m_state.ownerMonitor ? m_state.ownerMonitor : transitionMonitor;
 
     auto targetWorkspace = ::State::workspaceState()->query().id(targetWorkspaceId).run();
     if (!targetWorkspace && targetWorkspaceSyntheticEmpty) {
@@ -6085,6 +6180,43 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;
     {
         ScopedFlag applyingWorkspaceTransitionCommit(m_applyingWorkspaceTransitionCommit);
+
+        if (targetWorkspaceSyntheticEmpty || !containsHandle(next.managedWorkspaces, targetWorkspace) || next.ownerWorkspace != targetWorkspace) {
+            const std::vector<WorkspaceOverride> overrides = {{
+                .monitorId = transitionMonitor->m_id,
+                .workspace = targetWorkspace,
+                .workspaceId = targetWorkspaceId,
+                .workspaceName = targetWorkspaceName,
+                .syntheticEmpty = false,
+            }};
+
+            if (State rebuilt = buildState(rebuildMonitor, m_state.collectionPolicy.requestedScope, overrides, true); !rebuilt.participatingMonitors.empty())
+                next = std::move(rebuilt);
+        }
+
+        next.phase = Phase::Active;
+        next.focusBeforeOpen = m_state.focusBeforeOpen;
+        next.pendingExitFocus = m_state.pendingExitFocus;
+        next.closeMode = m_state.closeMode;
+        next.relayoutActive = false;
+        next.relayoutProgress = 1.0;
+        next.relayoutStart = {};
+        next.ownerWorkspace = targetWorkspace;
+
+        // Install the target overview state before the compositor workspace flip so
+        // render overrides never fall through to the native desktop for a frame.
+        carryOverWorkspaceStripSnapshots(next, m_state);
+        m_state = std::move(next);
+        applyWorkspaceNameOverrides(m_state);
+        if (workspaceStripEnabled(m_state)) {
+            refreshWorkspaceStripActivity();
+            for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
+                if (m_state.stripEntries[index].active) {
+                    m_state.hoveredStripIndex = index;
+                    break;
+                }
+            }
+        }
 
         transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
 
@@ -6106,36 +6238,22 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
         targetWorkspace->m_alpha->setValueAndWarp(1.F);
         g_layoutManager->recalculateMonitor(transitionMonitor);
-        if (Animation::mgr())
-            Animation::mgr()->frameTick();
+        if (g_pAnimationManager)
+            g_pAnimationManager->frameTick();
 
-        if (targetWorkspaceSyntheticEmpty || !containsHandle(next.managedWorkspaces, targetWorkspace) || next.ownerWorkspace != targetWorkspace) {
-            const auto rebuildMonitor = m_state.ownerMonitor ? m_state.ownerMonitor : transitionMonitor;
-            const std::vector<WorkspaceOverride> overrides = {{
-                .monitorId = transitionMonitor->m_id,
-                .workspace = targetWorkspace,
-                .workspaceId = targetWorkspaceId,
-                .workspaceName = targetWorkspaceName,
-                .syntheticEmpty = false,
-            }};
+        normalizeActiveWorkspacePresentation(transitionMonitor);
+        applyOverviewWorkspaceRenderOffsetFreeze();
+        applyOverviewWorkspaceVisibilitySuppression();
+        applyOverviewWorkspaceRenderOffsetFreeze();
+        enforceOverviewWorkspaceVisibility();
 
-            if (State rebuilt = buildState(rebuildMonitor, m_state.collectionPolicy.requestedScope, overrides, true); !rebuilt.participatingMonitors.empty())
-                next = std::move(rebuilt);
-        }
+        clearOverviewWorkspaceTransition();
+        if (!isEmptyOwnerWorkspaceOverview(m_state))
+            refreshWorkspaceStripSnapshots();
+        else
+            cancelWorkspaceStripSnapshotRefresh();
 
-        next.phase = Phase::Active;
-        next.focusBeforeOpen = m_state.focusBeforeOpen;
-        next.pendingExitFocus = m_state.pendingExitFocus;
-        next.closeMode = m_state.closeMode;
-        next.relayoutActive = false;
-        next.relayoutProgress = 1.0;
-        next.relayoutStart = {};
-
-        clearOverviewWorkspaceTransition(targetWorkspace);
-        carryOverWorkspaceStripSnapshots(next, m_state);
-        m_state = std::move(next);
-        applyWorkspaceNameOverrides(m_state);
-        refreshWorkspaceStripSnapshots();
+        syncFocusDuringOverviewToOwnerWorkspace("workspace-transition-commit");
         if (const auto focused = Desktop::focusState()->window()) {
             const auto focusedIt =
                 std::find_if(m_state.windows.begin(), m_state.windows.end(), [&](const ManagedWindow& managed) { return managed.window == focused; });
