@@ -344,6 +344,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("toggle_switch_mode", 0);
     INT_CONF("switch_toggle_auto_next", 1);
     INT_CONF("workspace_change_keeps_overview", 1);
+    FLOAT_CONF("overview_workspace_swipe_max_step_fraction", 0.15F);
     INT_CONF("workspace_strip_thickness", 160);
     INT_CONF("workspace_strip_gap", 24);
     INT_CONF("hide_bar_when_strip", 1);
