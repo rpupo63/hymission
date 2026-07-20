@@ -35,6 +35,7 @@
 
 #include "mission_layout.hpp"
 #include "overview_logic.hpp"
+#include "app_icon.hpp"
 
 class CEventLoopTimer;
 
@@ -183,6 +184,9 @@ class OverviewController {
         PHLWINDOW    window;
         PHLMONITOR   targetMonitor;
         std::string  title;
+        std::string  appClass;
+        std::string  appName;
+        std::string  iconName;
         Rect         naturalGlobal;
         Rect         exitGlobal;
         Rect         relayoutFromGlobal;
@@ -192,6 +196,24 @@ class OverviewController {
         bool         isFloating = false;
         bool         isPinned = false;
         bool         isNiriFloatingOverlay = false;
+    };
+
+    enum class ContextMenuAction : uint8_t {
+        Close = 0,
+        ForceQuit,
+        Minimize,
+        ToggleFullscreen,
+        ToggleFloating,
+        TogglePin,
+        Count,
+    };
+
+    struct ContextMenuState {
+        bool                       open = false;
+        std::optional<std::size_t> windowIndex;
+        Vector2D                   anchor;
+        Rect                       rect;
+        std::optional<std::size_t> hoveredItem;
     };
 
     struct WorkspaceStripEntry {
@@ -801,7 +823,16 @@ class OverviewController {
     void renderDraggedWindowPreview() const;
     void captureDraggedWindowTexture();
     void renderPickLabels() const;
+    void renderWindowLabels() const;
+    void renderContextMenu() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
+    [[nodiscard]] Rect windowLabelChromeGlobal(const ManagedWindow& managed) const;
+    [[nodiscard]] bool showWindowIconsEnabled() const;
+    [[nodiscard]] bool showWindowTitlesEnabled() const;
+    void openContextMenu(std::size_t windowIndex, const Vector2D& pointer);
+    void closeContextMenu();
+    [[nodiscard]] std::optional<std::size_t> hitTestContextMenuItem(double x, double y) const;
+    void runContextMenuAction(ContextMenuAction action, const PHLWINDOW& window);
     void activateStripTarget(std::size_t index);
     void clearStripWindowDragState();
     void clearPendingStripWorkspaceChange();
@@ -962,6 +993,9 @@ class OverviewController {
     bool                      m_suppressInitialHoverUpdate = false;
     PHLANIMVAR<float>         m_relayoutProgressAnimation;
     std::size_t               m_postOpenRefreshFrames = 0;
+    bool                      m_pendingToggleSwitchAutoNext = false;
+    ContextMenuState          m_contextMenu;
+    mutable AppIconCache      m_appIconCache;
 
     CHyprSignalListener       m_renderStageListener;
     CHyprSignalListener       m_mouseMoveListener;

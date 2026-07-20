@@ -31,12 +31,16 @@ src = [
   'src/mission_layout.cpp',
   'src/overview_logic.cpp',
   'src/overview_controller.cpp',
+  'src/app_icon.cpp',
 ]
 
 shared_module(meson.project_name(), src,
   dependencies: [
     dependency('hyprland'),
     dependency('lua'),
+    dependency('pango'),
+    dependency('pangocairo'),
+    dependency('gdk-pixbuf-2.0'),
   ],
   install: true,
 )
