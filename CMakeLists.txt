@@ -27,6 +27,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HYPR_DEPS REQUIRED hyprland)
 pkg_check_modules(LUA REQUIRED lua)
+pkg_check_modules(APP_ICON_DEPS REQUIRED pango pangocairo gdk-pixbuf-2.0)
 # nlohmann/json is vendored as a single header in src/vendor; no system package required.
 
 add_library(hymission SHARED
@@ -34,9 +35,10 @@ add_library(hymission SHARED
   src/mission_layout.cpp
   src/overview_logic.cpp
   src/overview_controller.cpp
+  src/app_icon.cpp
 )
 
-target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
+target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS} ${APP_ICON_DEPS_INCLUDE_DIRS})
 
 foreach(inc ${HYPR_DEPS_INCLUDE_DIRS})
   if(EXISTS "${inc}/hyprland/src")
@@ -44,8 +46,8 @@ foreach(inc ${HYPR_DEPS_INCLUDE_DIRS})
   endif()
 endforeach()
 
-target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS})
-target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES})
+target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS} ${APP_ICON_DEPS_LIBRARY_DIRS})
+target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} ${APP_ICON_DEPS_LIBRARIES})
 
 add_executable(hymission-layout-demo
   tools/layout_demo.cpp
