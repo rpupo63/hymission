@@ -245,6 +245,7 @@ class OverviewController {
         bool                     newWorkspaceSlot = false;
         bool                     specialWorkspace = false;
         bool                     active = false;
+        bool                     snapshotHadWindowContent = false;
     };
 
     struct DragPreviewTarget {
@@ -422,6 +423,7 @@ class OverviewController {
         double                                 animationToDelta = 0.0;
         double                                 animationProgress = 0.0;
         std::chrono::steady_clock::time_point  animationStart = {};
+        bool                                   fromOverviewSwipe = false;
     };
 
     struct WorkspaceTransitionRenderStateBackup {
@@ -434,10 +436,24 @@ class OverviewController {
         float        alphaGoal = 1.0F;
     };
 
+    struct WorkspaceRenderOffsetBackup {
+        PHLWORKSPACE workspace;
+        Vector2D     renderOffset;
+    };
+
+    struct WorkspaceVisibilityBackup {
+        PHLWORKSPACE workspace;
+        bool         wasVisible = false;
+    };
+
     struct WorkspaceSwipeGestureContext {
         bool                      active = false;
         PHLMONITOR                monitor;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
+        float                     deltaScale = 1.0F;
+        double                    rawTravel = 0.0;
+        double                    lastFrameDelta = 0.0;
+        int                       lockedStep = 0;
         double                    gestureDelta = 0.0;
         bool                      touchActive = false;
         int32_t                   touchId = 0;
@@ -596,6 +612,7 @@ class OverviewController {
     [[nodiscard]] bool         isVisible() const;
     [[nodiscard]] bool         shouldHandleInput() const;
     [[nodiscard]] bool         insideRenderLifecycle() const;
+    [[nodiscard]] bool         shouldUseOverviewRenderOverrides() const;
     [[nodiscard]] std::vector<PHLMONITOR> ownedMonitors() const;
     [[nodiscard]] bool         ownsMonitor(const PHLMONITOR& monitor) const;
     [[nodiscard]] bool         ownsWorkspace(const PHLWORKSPACE& workspace) const;
@@ -834,6 +851,28 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestContextMenuItem(double x, double y) const;
     void runContextMenuAction(ContextMenuAction action, const PHLWINDOW& window);
     void activateStripTarget(std::size_t index);
+    [[nodiscard]] bool activateStripTargetByStep(int step);
+    [[nodiscard]] std::optional<std::size_t> stripIndexForOwnerWorkspace() const;
+    [[nodiscard]] bool refreshWorkspaceStripActivity();
+    void cancelWorkspaceStripSnapshotRefresh();
+    void refreshWorkspaceStripWindowLayouts();
+    [[nodiscard]] bool workspaceStripSnapshotHasContent(const WorkspaceStripEntry& entry) const;
+    [[nodiscard]] bool stripEntryHasDisplayableContent(const WorkspaceStripEntry& entry) const;
+    [[nodiscard]] bool stripSnapshotsCaptureComplete() const;
+    void renderWorkspaceStripMinimap(const WorkspaceStripEntry& entry, const Rect& rect, const PHLMONITOR& monitor, double alpha) const;
+    void logStripRenderSymbolResolution() const;
+    [[nodiscard]] bool renderStripPreviewWindowsDirect(PHLMONITOR monitor, const Time::steady_tp& now) const;
+    void syncMonitorWorkspaceVisibility(const PHLMONITOR& monitor) const;
+    void syncMonitorWorkspacePresentation(const PHLMONITOR& monitor) const;
+    void clearStaleWorkspaceForceRendering() const;
+    void restoreCompositorWorkspacePresentation(const std::vector<PHLMONITOR>& monitors) const;
+    void syncFocusDuringOverviewToOwnerWorkspace(const char* source);
+    [[nodiscard]] bool shouldSuppressLiveCompositorWindowDuringOverview(const PHLWINDOW& window) const;
+    [[nodiscard]] bool isInsideLiveMonitorRenderPass() const;
+    [[nodiscard]] bool isInsideActiveRenderPass() const;
+    [[nodiscard]] bool inStripSnapshotRender() const;
+    [[nodiscard]] bool hasStripPreviewWindow(const PHLWINDOW& window) const;
+    [[nodiscard]] bool overviewRenderActiveForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     void clearStripWindowDragState();
     void clearPendingStripWorkspaceChange();
     [[nodiscard]] bool matchesPendingStripWorkspaceChange(const PHLWORKSPACE& workspace) const;
@@ -948,6 +987,8 @@ class OverviewController {
     WorkspaceTransition      m_workspaceTransition;
     std::vector<WorkspaceTransitionRenderStateBackup> m_workspaceTransitionRenderStateBackups;
     std::vector<WorkspaceTransitionRenderStateBackup> m_overviewRenderStateBackups;
+    std::vector<WorkspaceVisibilityBackup>            m_overviewWorkspaceVisibilityBackups;
+    std::vector<WorkspaceRenderOffsetBackup>          m_overviewWorkspaceRenderOffsetBackups;
     std::vector<FullscreenAlphaBackup> m_fullscreenAlphaBackups;
     StripPreviewContext      m_stripPreviewContext;
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
@@ -967,6 +1008,7 @@ class OverviewController {
     std::chrono::steady_clock::time_point m_externalCaptureInputSuppressUntil = {};
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
+    std::size_t              m_stripSnapshotRefreshGeneration = 0;
     bool                     m_primaryButtonPressed = false;
     bool                     m_closeButtonPressLatched = false; // swallow release after close-button click
     bool                     m_closeCursorOverride = false;     // forcing the "pointer" cursor while hover

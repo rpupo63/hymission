@@ -2989,7 +2989,6 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         m_primaryButtonPressed = false;
 
     const auto cachedHoveredStripIndex = m_state.hoveredStripIndex;
-    const Vector2D pointerBeforeUpdate = g_pInputManager->getMouseCoordsInternal();
     updateHoveredFromPointer(false, false, false, false, "mouse-button-refresh");
     const auto effectiveHoveredStripIndex = m_state.hoveredStripIndex ? m_state.hoveredStripIndex : cachedHoveredStripIndex;
     const auto effectiveHoveredIndex = m_state.hoveredIndex;
@@ -4447,6 +4446,7 @@ double OverviewController::closeButtonSize() const {
 
 double OverviewController::closeButtonInset() const {
     return static_cast<double>(getConfigInt(m_handle, "plugin:hymission:close_button_inset", 0));
+}
 
 bool OverviewController::showWindowIconsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_window_icons", 1) != 0;
@@ -4454,7 +4454,6 @@ bool OverviewController::showWindowIconsEnabled() const {
 
 bool OverviewController::showWindowTitlesEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_window_titles", 1) != 0;
-}
 }
 
 bool OverviewController::niriModeEnabled() const {
@@ -4821,6 +4820,19 @@ static void showCompositorWorkspacePresentation(const PHLWORKSPACE& workspace) {
     workspace->m_visible = true;
     workspace->m_alpha->setValueAndWarp(1.0F);
     workspace->m_forceRendering = false;
+}
+
+static void hideCompositorWorkspacePresentation(const PHLWORKSPACE& workspace) {
+    if (!workspace || workspace->m_isSpecialWorkspace)
+        return;
+
+    workspace->m_visible = false;
+    workspace->m_alpha->setValueAndWarp(0.0F);
+    workspace->m_forceRendering = false;
+}
+
+static bool compositorWorkspaceVisibleAfterRestore(bool isActive, bool isSpecial) {
+    return isActive && !isSpecial;
 }
 
 static void normalizeActiveWorkspacePresentation(const PHLMONITOR& monitor) {
@@ -6028,6 +6040,28 @@ void OverviewController::updateOverviewWorkspaceSwipeGestureFromGestureDistance(
     updateOverviewWorkspaceSwipeGesture(static_cast<double>(frameDistance));
 }
 
+namespace {
+struct OverviewWorkspaceSwipeFrameParams {
+    double frameDistance;
+    bool   invert;
+    float  deltaScale;
+    double maxStepFraction;
+    double travelDistance;
+    double currentTotal;
+};
+struct OverviewWorkspaceSwipeFrameResult {
+    double clampedStep;
+    double nextTotal;
+};
+static OverviewWorkspaceSwipeFrameResult computeOverviewWorkspaceSwipeFrame(const OverviewWorkspaceSwipeFrameParams& params) {
+    const double scaled = static_cast<double>(params.deltaScale) * params.frameDistance * (params.invert ? -1.0 : 1.0);
+    const double maxStep = params.travelDistance * params.maxStepFraction;
+    const double clampedStep = std::clamp(scaled, -maxStep, maxStep);
+    const double nextTotal = params.currentTotal + clampedStep;
+    return {.clampedStep = clampedStep, .nextTotal = nextTotal};
+}
+} // namespace
+
 void OverviewController::updateOverviewWorkspaceSwipeGesture(double frameDistance) {
     if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor)
         return;
@@ -6081,7 +6115,7 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double frameDistanc
 
     damageOwnedMonitors();
 
-    if (gestureSwipeForeverEnabled() && std::abs(m_workspaceSwipeGesture.gestureDelta) >= gestureDistance - 0.5)
+    if (gestureSwipeForeverEnabled() && std::abs(m_workspaceSwipeGesture.gestureDelta) >= gestureSwipeDistance() - 0.5)
         requestOverviewWorkspaceTransitionCommit(true);
 }
 
@@ -6124,7 +6158,7 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
 }
 
 std::string OverviewController::activeWorkspaceNameForSwipe() const {
-    const auto monitor = g_pCompositor ? g_pCompositor->getMonitorFromCursor() : PHLMONITOR{};
+    const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     if (!monitor || !monitor->m_activeWorkspace)
         return {};
     return monitor->m_activeWorkspace->m_name;
@@ -6180,7 +6214,7 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
         return;
 
     // If the native swipe already moved to another workspace, it handled it.
-    const auto monitor = g_pCompositor ? g_pCompositor->getMonitorFromCursor() : PHLMONITOR{};
+    const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     const auto activeWorkspace = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
     if (!activeWorkspace || activeWorkspace->m_name != beginName)
         return;
@@ -6366,8 +6400,8 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
         targetWorkspace->m_alpha->setValueAndWarp(1.F);
         g_layoutManager->recalculateMonitor(transitionMonitor);
-        if (g_pAnimationManager)
-            g_pAnimationManager->frameTick();
+        if (Animation::mgr())
+            Animation::mgr()->frameTick();
 
         normalizeActiveWorkspacePresentation(transitionMonitor);
         applyOverviewWorkspaceRenderOffsetFreeze();
@@ -7244,7 +7278,7 @@ bool OverviewController::renderStripPreviewWindowsDirect(PHLMONITOR monitor, con
     bool renderedAny = false;
     for (const auto& managed : m_stripPreviewContext.state.windows) {
         const auto& window = managed.window;
-        if (!window || !window->m_isMapped || window->isHidden() || window->m_fadingOut)
+        if (!window || !window->m_isMapped || window->isHidden() || isWindowFadingOut(window))
             continue;
 
         renderWindowFn(g_pHyprRenderer.get(), window, monitor, now, true, Render::RENDER_PASS_ALL, false, true);
@@ -7429,6 +7463,10 @@ bool OverviewController::isVisible() const {
     return m_state.phase != Phase::Inactive;
 }
 
+bool OverviewController::shouldUseOverviewRenderOverrides() const {
+    return isVisible();
+}
+
 bool OverviewController::shouldHandleInput() const {
     if (captureInputSuppressed())
         return false;
@@ -7528,7 +7566,7 @@ bool OverviewController::ownerWorkspaceHasMappedWindows(const PHLWORKSPACE& work
         return false;
 
     for (const auto& window : Desktop::viewState()->windows()) {
-        if (!window || !window->m_isMapped || window->isHidden() || window->m_fadingOut)
+        if (!window || !window->m_isMapped || window->isHidden() || isWindowFadingOut(window))
             continue;
 
         if (window->m_workspace == workspace)
@@ -8820,9 +8858,9 @@ bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, cons
         } else if (m_workspaceTransition.active && hasManagedWindow(renderData->pWindow)) {
             // Transition workspaces stay m_visible=false; Hyprland still multiplies
             // fadeAlpha by workspace alpha in some paths. Keep overview previews opaque.
-            if (!renderData->pWindow->m_fadingOut)
+            if (!isWindowFadingOut(renderData->pWindow))
                 renderData->fadeAlpha = 1.0F;
-        } else if (!renderData->pWindow->m_fadingOut && snapshot.fadeAlpha <= 0.001F)
+        } else if (!isWindowFadingOut(renderData->pWindow) && snapshot.fadeAlpha <= 0.001F)
             renderData->fadeAlpha = 1.0F;
     }
 
@@ -12490,8 +12528,8 @@ void OverviewController::restoreCompositorWorkspacePresentation(const std::vecto
         syncMonitorWorkspacePresentation(monitor);
     }
 
-    if (g_pAnimationManager)
-        g_pAnimationManager->frameTick();
+    if (Animation::mgr())
+        Animation::mgr()->frameTick();
 }
 
 void OverviewController::cancelWorkspaceStripSnapshotRefresh() {
