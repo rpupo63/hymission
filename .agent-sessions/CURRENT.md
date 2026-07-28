@@ -1,11 +1,11 @@
-# Handoff — hymission — 2026-07-27T15:05:42Z
+# Handoff — hymission — 2026-07-28T20:50:55Z
 
 - Goal: continue from prior work
-- Branch: `sync/v0.56.0`
+- Branch: `master`
 - Host: `beto`
 - Tool: `claude`
-- Session: `4ec5d70a-4e55-4697-9aa5-3172e4236eea`
-- Updated: 2026-07-27T15:05:42Z
+- Session: `06e3a9bc-ffa7-4505-b7e7-1a98b7110dcd`
+- Updated: 2026-07-28T20:50:55Z
 
 ## Done
 - Checkpoint written (parse/fallback path)
@@ -21,13 +21,14 @@
 
 ## Recent context
 ### Last user prompts
-- my three finger swipe up to see mission control mode breaks with every update of hyprland, how can I fix that? Do I just have to update my hymission each time manually to work with hymission?
-- make a plan to keep us consiustent with the upstream merges while keeping our specific edits as well
-- make a plan to keep us consiustent with the upstream merges while keeping our specific quality of life improvement edits as well
-- This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation. Summary: 1. Primary Request and Intent: - **Initial question**: "my three finger swipe up to see mission control mode breaks with every update of hyprland, how can I fix that? Do I just have to update my hymission each time manually?" — User wanted
-- This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation. Summary: 1. Primary Request and Intent: - **Original ask**: Why does the 3-finger swipe up (mission control / hymission) break with every Hyprland update, and how to prevent manual re-fixing each time. - **Main task (approved)**: Sync local `hymiss
+- done
+- [Your previous response had no visible output. Please continue and produce a user-visible response.]
+- done
+- ok this all now. now make a plan to help us locally preserve all the edits we've made when we merge back with the main-non-forked version of this app again, like the app icons and the ability to change workspaces while in hymission mode
+- yes go ahead, commit the fixes and squash the checkpoints
+- This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation. Summary: 1. Primary Request and Intent: - **Resolved**: Fix right swipes not working in hymission overview. After the previous session fixed the "screens on top of each other" visual glitch (by passing `targetWorkspace` to `clearOverviewWorkspaceTr
 
 ### Last assistant conclusions
-- Now I have the full picture. Let me look at conflict 1 in detail to know exactly what LOCAL provides:
-- Let me also check for `updateOverviewWorkspaceSwipeGestureAdjusted` callers before I start editing:
-- Now I have everything I need. The resolution plan: - Conflict 1: Take LOCAL (5 new functions) - Conflict 2: Take LOCAL (new swipe-end logic) - Conflict 3: Take LOCAL (new state-transition logic) - Conflict 4: Take HEAD (drop debug marker) - After conflicts: fix line 3781 (just `return;`) and add a stub `setOverviewWorkspaceSwipeGestureDelta` that translates absolute→frame delta Let me write a Pyth
+- That's a repo-level permissions file — it should be committed. I'll add it alongside the patches:
+- Now push to origin:
+- Done. Here's where things stand: - **History is clean**: `upstream/master..HEAD` is now 12 commits (11 meaningful patches + the `PATCHES.md` commit), zero checkpoints. - **`patches/` directory**: 11 numbered `.patch` files — apply with `git am patches/*.patch` after any upstream rebase. - **`PATCHES.md`**: each patch documented with problem, solution, and functions touched. - **Pushed** to `origin
