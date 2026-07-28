@@ -1857,12 +1857,13 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
 
         if (g_controller->allowsWorkspaceSwitchInOverviewForGestures()) {
             const auto configuredDirection = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : m_direction;
-            if (!g_controller->beginOverviewWorkspaceSwipeGesture(configuredDirection))
+            if (!g_controller->beginOverviewWorkspaceSwipeGesture(configuredDirection)) {
+                m_mode = Mode::Blocked;
                 return;
+            }
 
             ITrackpadGesture::begin(e);
             m_mode = Mode::Overview;
-            g_controller->updateOverviewWorkspaceSwipeGesture(distance(e));
             return;
         }
 
@@ -3775,10 +3776,7 @@ void OverviewController::workspaceSwipeBeginHook(void* gestureThisptr, const ITr
         const auto direction = e.direction != TRACKPAD_GESTURE_DIR_NONE ?
             e.direction :
             (workspaceSwipeUsesVerticalAxis(activeLayoutWorkspace()) ? TRACKPAD_GESTURE_DIR_VERTICAL : TRACKPAD_GESTURE_DIR_HORIZONTAL);
-        if (beginOverviewWorkspaceSwipeGesture(direction))
-            updateOverviewWorkspaceSwipeGesture(swipeDistanceForDirection(e));
-        else if (debugLogsEnabled())
-            debugLog("[hymission] consume native workspace swipe begin during active-workspace overview");
+        beginOverviewWorkspaceSwipeGesture(direction);
         return;
     }
 
