@@ -3288,6 +3288,12 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window, WindowSetChange
         if (shouldDeferRebuild) {
             scheduleVisibleStateRebuild();
         } else {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] handleWindowSetChange clearing transition window="
+                    << debugWindowLabel(window) << " kind=" << static_cast<int>(kind);
+                debugLog(out.str());
+            }
             clearOverviewWorkspaceTransition();
             rebuildVisibleState();
             updatePendingWindowGeometryRetry(window);
@@ -3397,12 +3403,29 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
         if (allowExternalTransition && beginExternalOverviewWorkspaceTransition(workspace))
             return;
 
-        if (m_workspaceTransition.active)
+        if (m_workspaceTransition.active) {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] handleWorkspaceChange Rebuild clearing transition ws="
+                    << (workspace ? workspace->m_name : "null")
+                    << " swipeActive=" << m_workspaceSwipeGesture.active
+                    << " fromOverviewSwipe=" << m_workspaceTransition.fromOverviewSwipe
+                    << " applyingCommit=" << m_applyingWorkspaceTransitionCommit;
+                debugLog(out.str());
+            }
             clearOverviewWorkspaceTransition();
+        }
         rebuildVisibleState();
         return;
     }
 
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] handleWorkspaceChange Abort ws=" << (workspace ? workspace->m_name : "null")
+            << " swipeActive=" << m_workspaceSwipeGesture.active
+            << " transitionActive=" << m_workspaceTransition.active;
+        debugLog(out.str());
+    }
     beginClose(CloseMode::Abort);
 }
 
@@ -5966,6 +5989,7 @@ bool OverviewController::beginOverviewWorkspaceSwipeTransitionForStep(int step) 
                     const bool        syntheticTarget = !targetWorkspace && (entry.syntheticEmpty || entry.newWorkspaceSlot);
                     if (beginOverviewWorkspaceTransition(entry.monitor, entry.workspaceId, targetName, targetWorkspace, syntheticTarget, WorkspaceTransitionMode::Gesture)) {
                         m_workspaceTransition.step = step < 0 ? -1 : 1;
+                        m_workspaceTransition.fromOverviewSwipe = true;
                         if (debugLogsEnabled()) {
                             std::ostringstream out;
                             out << "[hymission] overview workspace swipe gesture transition via strip index=" << targetIndex << " step=" << step;
@@ -5982,6 +6006,7 @@ bool OverviewController::beginOverviewWorkspaceSwipeTransitionForStep(int step) 
     if (!startOverviewWorkspaceTransitionByStep(monitor, step, WorkspaceTransitionMode::Gesture))
         return false;
 
+    m_workspaceTransition.fromOverviewSwipe = true;
     enforceOverviewWorkspaceVisibility();
     return true;
 }
@@ -6418,7 +6443,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         applyOverviewWorkspaceRenderOffsetFreeze();
         enforceOverviewWorkspaceVisibility();
 
-        clearOverviewWorkspaceTransition();
+        clearOverviewWorkspaceTransition(targetWorkspace);
         if (!isEmptyOwnerWorkspaceOverview(m_state))
             refreshWorkspaceStripSnapshots();
         else
@@ -6610,6 +6635,16 @@ void OverviewController::restoreOverviewRenderState() {
 }
 
 void OverviewController::clearOverviewWorkspaceTransition(const PHLWORKSPACE& committedWorkspace) {
+    if (debugLogsEnabled()) {
+        debugLog("[hymission] clearOverviewWorkspaceTransition swipeActive=" + std::to_string(m_workspaceSwipeGesture.active) +
+                 " fromOverviewSwipe=" + std::to_string(m_workspaceTransition.fromOverviewSwipe) +
+                 " applyingCommit=" + std::to_string(m_applyingWorkspaceTransitionCommit) +
+                 " committed=" + (committedWorkspace ? committedWorkspace->m_name : "null") +
+                 " transition.active=" + std::to_string(m_workspaceTransition.active) +
+                 " mode=" + std::to_string(static_cast<int>(m_workspaceTransition.mode)) +
+                 " step=" + std::to_string(m_workspaceTransition.step) +
+                 " phase=" + std::to_string(static_cast<int>(m_state.phase)));
+    }
     restoreWorkspaceTransitionRenderState(committedWorkspace);
     clearPendingWindowGeometryRetry();
     m_workspaceTransitionCommitScheduled = false;
@@ -12200,6 +12235,67 @@ void OverviewController::activateStripTarget(std::size_t index) {
         if (debugLogsEnabled())
             debugLog("[hymission] strip target transition begin failed");
         damageOwnedMonitors();
+    }
+}
+
+bool OverviewController::activateStripTargetByStep(int step) {
+    if (step == 0 || m_state.stripEntries.empty())
+        return false;
+    const auto currentIndex = stripIndexForOwnerWorkspace();
+    if (!currentIndex)
+        return false;
+    const int targetIndex = static_cast<int>(*currentIndex) + step;
+    if (targetIndex < 0 || static_cast<std::size_t>(targetIndex) >= m_state.stripEntries.size())
+        return false;
+    activateStripTarget(static_cast<std::size_t>(targetIndex));
+    return true;
+}
+
+std::optional<std::size_t> OverviewController::stripIndexForOwnerWorkspace() const {
+    if (m_state.stripEntries.empty() || !m_state.ownerWorkspace)
+        return {};
+    for (std::size_t i = 0; i < m_state.stripEntries.size(); ++i) {
+        const auto& entry = m_state.stripEntries[i];
+        if (entry.workspace == m_state.ownerWorkspace || entry.workspaceId == m_state.ownerWorkspace->m_id)
+            return i;
+    }
+    return {};
+}
+
+bool OverviewController::refreshWorkspaceStripActivity() {
+    bool changed = false;
+    for (auto& entry : m_state.stripEntries) {
+        const bool active = entry.monitor && entry.workspace && entry.monitor->m_activeWorkspace == entry.workspace;
+        if (entry.active == active)
+            continue;
+        entry.active = active;
+        changed = true;
+    }
+    return changed;
+}
+
+void OverviewController::syncFocusDuringOverviewToOwnerWorkspace(const char* source) {
+    if (!m_state.ownerWorkspace)
+        return;
+    // Prefer existing focusDuringOverview if already on the owner workspace.
+    if (m_state.focusDuringOverview && m_state.focusDuringOverview->m_isMapped &&
+        m_state.focusDuringOverview->m_workspace == m_state.ownerWorkspace) {
+        syncRealFocusDuringOverview(m_state.focusDuringOverview, false);
+        return;
+    }
+    // Otherwise find the first managed window on the owner workspace.
+    for (const auto& managed : m_state.windows) {
+        const auto& win = managed.window;
+        if (!win || !win->m_isMapped || win->m_workspace != m_state.ownerWorkspace)
+            continue;
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] sync focus during overview to owner workspace=" << debugWorkspaceLabel(m_state.ownerWorkspace)
+                << " candidate=" << debugWindowLabel(win) << " source=" << (source ? source : "?");
+            debugLog(out.str());
+        }
+        syncRealFocusDuringOverview(win, false);
+        return;
     }
 }
 
