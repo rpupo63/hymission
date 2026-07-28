@@ -5846,7 +5846,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
         .mode = mode,
         .distance = workspaceSwipeViewportDistance(monitor, transitionAxis),
         .delta = 0.0,
-        .step = workspaceId > monitor->m_activeWorkspace->m_id ? 1 : -1,
+        .step = workspaceId > transitionWorkspace->m_id ? 1 : -1,
         .initialDirection = 0,
         .avgSpeed = 0.0,
         .speedPoints = 0,
@@ -6380,7 +6380,11 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
             }
         }
 
+        if (debugLogsEnabled())
+            debugLog("[hymission] commitOverviewWorkspaceTransition: calling changeWorkspace id=" + std::to_string(targetWorkspaceId));
         transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
+        if (debugLogsEnabled())
+            debugLog("[hymission] commitOverviewWorkspaceTransition: changeWorkspace done");
 
         if (oldWorkspace && oldWorkspace != targetWorkspace) {
             for (const auto& window : Desktop::viewState()->windows()) {
@@ -6399,9 +6403,16 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         // remains visually shifted after the overview transition commits.
         targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
         targetWorkspace->m_alpha->setValueAndWarp(1.F);
-        g_layoutManager->recalculateMonitor(transitionMonitor);
+        if (debugLogsEnabled())
+            debugLog("[hymission] commitOverviewWorkspaceTransition: recalculateMonitor");
+        if (g_layoutManager)
+            g_layoutManager->recalculateMonitor(transitionMonitor);
+        if (debugLogsEnabled())
+            debugLog("[hymission] commitOverviewWorkspaceTransition: frameTick");
         if (Animation::mgr())
             Animation::mgr()->frameTick();
+        if (debugLogsEnabled())
+            debugLog("[hymission] commitOverviewWorkspaceTransition: enforcing visibility");
 
         normalizeActiveWorkspacePresentation(transitionMonitor);
         applyOverviewWorkspaceRenderOffsetFreeze();
