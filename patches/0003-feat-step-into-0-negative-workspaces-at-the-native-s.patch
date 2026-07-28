@@ -1,0 +1,163 @@
+From 72f0895e762a4acf5819b1e6ee53b0598335707b Mon Sep 17 00:00:00 2001
+From: Robbie P <rpupo63@gmail.com>
+Date: Wed, 10 Jun 2026 14:35:30 -0400
+Subject: [PATCH 03/11] feat: step into 0/negative workspaces at the
+ native-swipe edge
+
+With gestures:workspace_swipe_use_r the native horizontal workspace swipe
+now lands on empty positive workspaces (1->2->3) with animation, but it can
+only navigate positive numeric workspaces. When the overview is closed,
+hymission's CHymissionWorkspaceTrackpadGesture delegates to that native
+swipe; this adds a boundary handoff: it records the workspace at swipe begin,
+accumulates the signed travel, and on end -- if the native swipe could not
+move (still on the same workspace) and the swipe committed -- steps one
+workspace by number into a 0/negative named workspace via the workspace
+dispatcher, mirroring hypr-workspace-nav. Positive moves are left entirely to
+the native animated swipe.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ src/overview_controller.cpp | 82 +++++++++++++++++++++++++++++++++++++
+ src/overview_controller.hpp |  5 +++
+ 2 files changed, 87 insertions(+)
+
+diff --git a/src/overview_controller.cpp b/src/overview_controller.cpp
+index 0e84290..248764b 100644
+--- a/src/overview_controller.cpp
++++ b/src/overview_controller.cpp
+@@ -1828,6 +1828,9 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
+ 
+     void begin(const STrackpadGestureBegin& e) override {
+         m_mode = Mode::Native;
++        m_nativeRawTravel = 0.0;
++        m_nativeLastFrame = 0.0;
++        m_nativeBeginWsName = g_controller ? g_controller->activeWorkspaceNameForSwipe() : std::string{};
+ 
+         if (!g_controller || !e.swipe) {
+             m_nativeGesture.begin(e);
+@@ -1863,6 +1866,8 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
+             return;
+         }
+ 
++        m_nativeLastFrame = distance(e);
++        m_nativeRawTravel += m_nativeLastFrame;
+         m_nativeGesture.update(e);
+     }
+ 
+@@ -1877,6 +1882,13 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
+         }
+ 
+         m_nativeGesture.end(e);
++        m_mode = Mode::Native;
++
++        // Native swipe (with workspace_swipe_use_r) only reaches positive numeric
++        // workspaces. Hand off at the edge so a swipe can step into 0/negative
++        // named workspaces too.
++        if (g_controller)
++            g_controller->handleNativeWorkspaceSwipeBoundary(m_nativeBeginWsName, m_nativeRawTravel, m_nativeLastFrame, e.swipe ? e.swipe->cancelled : true);
+     }
+ 
+     bool isDirectionSensitive() override {
+@@ -1893,6 +1905,9 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
+     CWorkspaceSwipeGesture   m_nativeGesture;
+     eTrackpadGestureDirection m_direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+     Mode                      m_mode = Mode::Native;
++    double                    m_nativeRawTravel = 0.0;
++    double                    m_nativeLastFrame = 0.0;
++    std::string               m_nativeBeginWsName;
+ };
+ 
+ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
+@@ -5886,6 +5901,73 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
+     damageOwnedMonitors();
+ }
+ 
++std::string OverviewController::activeWorkspaceNameForSwipe() const {
++    const auto monitor = g_pCompositor ? g_pCompositor->getMonitorFromCursor() : PHLMONITOR{};
++    if (!monitor || !monitor->m_activeWorkspace)
++        return {};
++    return monitor->m_activeWorkspace->m_name;
++}
++
++void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& beginName, double rawTravel, double lastFrame, bool cancelled) {
++    if (cancelled || beginName.empty() || !m_changeWorkspaceOriginal)
++        return;
++
++    // Only numerically-named workspaces participate (matches hypr-workspace-nav).
++    const auto parseSigned = [](const std::string& name, long& out) -> bool {
++        std::size_t start = (name[0] == '-') ? 1 : 0;
++        if (start == name.size())
++            return false;
++        for (std::size_t i = start; i < name.size(); ++i)
++            if (!std::isdigit(static_cast<unsigned char>(name[i])))
++                return false;
++        try {
++            out = std::stol(name);
++        } catch (const std::exception&) {
++            return false;
++        }
++        return true;
++    };
++
++    long current = 0;
++    if (!parseSigned(beginName, current))
++        return;
++
++    double travel = rawTravel;
++    if (workspaceSwipeInvertEnabled())
++        travel = -travel;
++    if (std::abs(travel) < 0.0001)
++        return;
++    const int step = travel < 0.0 ? -1 : 1;
++
++    const double commitDistanceThreshold = overviewWorkspaceSwipeCommitDistance();
++    const double speedThreshold = gestureForceSpeedThreshold();
++    const bool   distanceCommit = std::abs(travel) >= commitDistanceThreshold;
++    const bool   speedCommit = speedThreshold > 0.0 && std::abs(lastFrame) >= speedThreshold && distanceCommit;
++    if (!distanceCommit && !speedCommit)
++        return;
++
++    // If the native swipe already moved to another workspace, it handled it.
++    const auto monitor = g_pCompositor ? g_pCompositor->getMonitorFromCursor() : PHLMONITOR{};
++    const auto activeWorkspace = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
++    if (!activeWorkspace || activeWorkspace->m_name != beginName)
++        return;
++
++    const long target = current + step;
++    // The native swipe already covers moves that stay on positive workspaces; only
++    // take over when starting from or stepping onto a 0/negative named workspace.
++    if (current >= 1 && target >= 1)
++        return;
++
++    const std::string targetArg = target >= 1 ? std::to_string(target) : ("name:" + std::to_string(target));
++    if (debugLogsEnabled()) {
++        std::ostringstream out;
++        out << "[hymission] native workspace swipe boundary handoff begin=" << beginName << " step=" << step << " target=" << targetArg
++            << " rawTravel=" << rawTravel;
++        debugLog(out.str());
++    }
++    m_changeWorkspaceOriginal(targetArg);
++}
++
+ void OverviewController::updateOverviewWorkspaceTransition() {
+     if (!m_workspaceTransition.active || m_workspaceTransition.mode == WorkspaceTransitionMode::Gesture)
+         return;
+diff --git a/src/overview_controller.hpp b/src/overview_controller.hpp
+index 1eaf79b..bce7ad7 100644
+--- a/src/overview_controller.hpp
++++ b/src/overview_controller.hpp
+@@ -83,6 +83,11 @@ class OverviewController {
+     void                          updateOverviewWorkspaceSwipeGesture(double delta);
+     void                          setOverviewWorkspaceSwipeGestureDelta(double delta);
+     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
++    // Active workspace name on the monitor under the cursor, for native-swipe boundary handoff.
++    [[nodiscard]] std::string     activeWorkspaceNameForSwipe() const;
++    // When the native (Hyprland) workspace swipe runs while the overview is closed it can only
++    // reach positive numeric workspaces. This steps into 0/negative named workspaces at the edge.
++    void                          handleNativeWorkspaceSwipeBoundary(const std::string& beginName, double rawTravel, double lastFrame, bool cancelled);
+     [[nodiscard]] bool            beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction,
+                                                      const IPointer::SSwipeUpdateEvent& event, float deltaScale);
+     void                          updateScrollGesture(const IPointer::SSwipeUpdateEvent& event);
+-- 
+2.55.0
+

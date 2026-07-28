@@ -1,0 +1,61 @@
+From 7f8d1127c78933bafc5118d570a7701c37f56d96 Mon Sep 17 00:00:00 2001
+From: Robbie P <rpupo63@gmail.com>
+Date: Tue, 28 Jul 2026 14:32:14 -0400
+Subject: [PATCH 10/11] fix: skip begin-event delta to fix right-swipe
+ direction lock in overview
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ITrackpadGesture::distance() for dir=NONE returns delta.size() (unsigned
+magnitude), which with workspace_swipe_invert=1 always produces a negative
+first frame (-42 px). This immediately locked lockedStep=-1 before the user's
+actual swipe direction was established, making rightward swipes always fail
+(sameDirection=false at end → no commit).
+
+Drop the updateOverviewWorkspaceSwipeGesture(distance(e)) call from
+CHymissionWorkspaceTrackpadGesture::begin so the first real update event
+(which has a classified dir=left with correct signed delta.x) sets the
+direction lock instead. Also set m_mode=Blocked on failed begin, and
+simplify workspaceSwipeBeginHook which had the same pattern via the hook path.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+---
+ src/overview_controller.cpp | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/src/overview_controller.cpp b/src/overview_controller.cpp
+index 4e6e608..6b21e62 100644
+--- a/src/overview_controller.cpp
++++ b/src/overview_controller.cpp
+@@ -1857,12 +1857,13 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
+ 
+         if (g_controller->allowsWorkspaceSwitchInOverviewForGestures()) {
+             const auto configuredDirection = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : m_direction;
+-            if (!g_controller->beginOverviewWorkspaceSwipeGesture(configuredDirection))
++            if (!g_controller->beginOverviewWorkspaceSwipeGesture(configuredDirection)) {
++                m_mode = Mode::Blocked;
+                 return;
++            }
+ 
+             ITrackpadGesture::begin(e);
+             m_mode = Mode::Overview;
+-            g_controller->updateOverviewWorkspaceSwipeGesture(distance(e));
+             return;
+         }
+ 
+@@ -3775,10 +3776,7 @@ void OverviewController::workspaceSwipeBeginHook(void* gestureThisptr, const ITr
+         const auto direction = e.direction != TRACKPAD_GESTURE_DIR_NONE ?
+             e.direction :
+             (workspaceSwipeUsesVerticalAxis(activeLayoutWorkspace()) ? TRACKPAD_GESTURE_DIR_VERTICAL : TRACKPAD_GESTURE_DIR_HORIZONTAL);
+-        if (beginOverviewWorkspaceSwipeGesture(direction))
+-            updateOverviewWorkspaceSwipeGesture(swipeDistanceForDirection(e));
+-        else if (debugLogsEnabled())
+-            debugLog("[hymission] consume native workspace swipe begin during active-workspace overview");
++        beginOverviewWorkspaceSwipeGesture(direction);
+         return;
+     }
+ 
+-- 
+2.55.0
+

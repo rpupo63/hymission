@@ -1,0 +1,607 @@
+From b20fd330ce12035ed4fcf61c179374aa9049831f Mon Sep 17 00:00:00 2001
+From: Robbie P <rpupo63@gmail.com>
+Date: Mon, 20 Jul 2026 18:13:44 -0400
+Subject: [PATCH 07/11] Add overview app icons and right-click window menu
+
+---
+ README.md                   |   2 +
+ docs/todo.md                |   2 +-
+ meson.build                 |   4 +
+ src/main.cpp                |   2 +
+ src/overview_controller.cpp | 350 ++++++++++++++++++++++++++++++++++--
+ src/overview_controller.hpp |  34 ++++
+ 6 files changed, 380 insertions(+), 14 deletions(-)
+
+diff --git a/README.md b/README.md
+index 13d7226..f7aa761 100644
+--- a/README.md
++++ b/README.md
+@@ -377,6 +377,8 @@ hl.config({
+ | `pick_labels_enabled` | bool | `0` | Show keyboard pick labels on previews and enable direct keyboard selection in the configured `pick_labels_mode`. Reuses `close_button_color` / `close_button_glyph_color` / `close_button_size` for styling; previews too small for a legible chip skip drawing it but remain selectable. |
+ | `pick_labels_mode` | string | `sequential` | `sequential` keeps the numbered `1`-`9`, `A1`-`Z9` scheme. `spatial` maps the physical ANSI alphanumeric block to preview centers across the participating monitors. Up to 36 windows receive distinct single-key labels; denser layouts share a primary key and show a two-key route such as `FF` or `FR`. |
+ | `pick_labels_direct_activate` | bool | `0` | Only applies when `pick_labels_enabled = 1`. `0` only moves the selection (still requires `Return` to confirm, same as arrow keys); `1` activates and closes overview immediately when a pick label is hit. |
++| `show_window_icons` | bool | `1` | Draw the app icon centered above each overview preview. |
++| `show_window_titles` | bool | `1` | Reveal the app name above a preview while it is hovered or selected. |
+ 
+ Behavior notes:
+ 
+diff --git a/docs/todo.md b/docs/todo.md
+index 15a5ffc..2ce49ef 100644
+--- a/docs/todo.md
++++ b/docs/todo.md
+@@ -7,7 +7,7 @@
+ | 功能 | hymission 当前状态 | 处理结论 |
+ | --- | --- | --- |
+ | 多 workspace overview 条带 + 跨 workspace 拖拽 | 已实现首版：strip 显示、点击切换、overview 内拖拽 drop；原生 `bindm ... movewindow` 集成和高保真缩略图未完成 | `In Progress`，见 [`workspace_strip_plan.md`](workspace_strip_plan.md) |
+-| overview 中右键关闭窗口 | 未实现；当前只有左键激活 | `TODO` |
++| overview 中右键关闭窗口 | 已实现右键上下文菜单：Close / Force Quit / Minimize / Toggle Fullscreen / Toggle Floating / Toggle Pin | `Done` |
+ | 触控板手势进入 overview / 在 overview 中手势切换 workspace | 已实现；支持官方 `gesture = ..., dispatcher, hymission:*` 和 overview-to-overview workspace swipe | `Done` |
+ | Alt-release / Alt-Tab 风格的“按住主键进入，松开主键退出”模式 | 已实现 toggle-only switch mode：仅影响 `hymission:toggle`，支持 `switch_toggle_auto_next` 和 `switch_release_key` | `Done` |
+ | 独立的 `movefocus` dispatcher（方向切换 / 循环切换） | 未实现；当前只支持 overview 内方向键导航 | `TODO` |
+diff --git a/meson.build b/meson.build
+index 75e8721..6a7f119 100644
+--- a/meson.build
++++ b/meson.build
+@@ -31,12 +31,16 @@ src = [
+   'src/mission_layout.cpp',
+   'src/overview_logic.cpp',
+   'src/overview_controller.cpp',
++  'src/app_icon.cpp',
+ ]
+ 
+ shared_module(meson.project_name(), src,
+   dependencies: [
+     dependency('hyprland'),
+     dependency('lua'),
++    dependency('pango'),
++    dependency('pangocairo'),
++    dependency('gdk-pixbuf-2.0'),
+   ],
+   install: true,
+ )
+diff --git a/src/main.cpp b/src/main.cpp
+index b1c22f4..71af041 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -359,6 +359,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+     INT_CONF("pick_labels_enabled", 0);
+     STRING_CONF("pick_labels_mode", "sequential");
+     INT_CONF("pick_labels_direct_activate", 0);
++    INT_CONF("show_window_icons", 1);
++    INT_CONF("show_window_titles", 1);
+     INT_CONF("window_decoration_enabled", 1);
+     INT_CONF("close_button_enabled", 0);
+     INT_CONF("close_button_size", 18);
+diff --git a/src/overview_controller.cpp b/src/overview_controller.cpp
+index a14918e..7fcf002 100644
+--- a/src/overview_controller.cpp
++++ b/src/overview_controller.cpp
+@@ -70,6 +70,9 @@
+ #include <hyprutils/math/Region.hpp>
+ 
+ #include "overview_logic.hpp"
++#include "app_icon.hpp"
++
++#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
+ 
+ namespace hymission {
+ 
+@@ -94,6 +97,8 @@ class OverviewOverlayPassElement final : public IPassElement {
+         m_controller->renderSelectionChrome();
+         m_controller->renderPickLabels();
+         m_controller->renderCloseButtons();
++        m_controller->renderWindowLabels();
++        m_controller->renderContextMenu();
+         m_controller->renderWorkspaceStrip();
+         m_controller->renderDraggedWindowPreview();
+         return {};
+@@ -189,6 +194,14 @@ constexpr double BACKDROP_ALPHA = 0.42;
+ constexpr double OUTLINE_THICKNESS = 4.0;
+ constexpr double HOVER_THICKNESS = 2.0;
+ constexpr double TITLE_PADDING = 12.0;
++constexpr double WINDOW_ICON_SIZE = 36.0;
++constexpr double WINDOW_ICON_GAP = 8.0;
++constexpr double WINDOW_TITLE_GAP = 4.0;
++constexpr double CONTEXT_MENU_ITEM_HEIGHT = 30.0;
++constexpr double CONTEXT_MENU_PADDING_X = 14.0;
++constexpr double CONTEXT_MENU_PADDING_Y = 6.0;
++constexpr double CONTEXT_MENU_MIN_WIDTH = 168.0;
++constexpr double CONTEXT_MENU_FONT_SIZE = 14.0;
+ constexpr double STRIP_CARD_PADDING = 0.0;
+ constexpr double STRIP_THUMB_PADDING = 0.0;
+ constexpr double STRIP_LABEL_HEIGHT = 0.0;
+@@ -2862,7 +2875,17 @@ void OverviewController::handleMouseMove() {
+         return;
+     }
+ 
+-    updateHoveredFromPointer(true, true, true, true, "mouse-move");
++    // Pointer motion should only refresh hover hit-testing. Selection/focus retargeting
++    // stays on click/keyboard paths so expand-selected relayout is not retriggered.
++    updateHoveredFromPointer(false, false, false, false, "mouse-move");
++
++    if (m_contextMenu.open) {
++        const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
++        const auto previousHovered = m_contextMenu.hoveredItem;
++        m_contextMenu.hoveredItem = hitTestContextMenuItem(pointer.x, pointer.y);
++        if (previousHovered != m_contextMenu.hoveredItem)
++            damageOwnedMonitors();
++    }
+ }
+ 
+ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) {
+@@ -2920,9 +2943,46 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event)
+         debugLog(out.str());
+     }
+ 
+-    if (effectiveButton != BTN_LEFT)
++    if (effectiveButton != BTN_LEFT && effectiveButton != BTN_RIGHT)
+         return true;
+ 
++    const auto cachedHoveredIndex = m_state.hoveredIndex;
++    const Vector2D pointerBeforeUpdate = g_pInputManager->getMouseCoordsInternal();
++
++    if (effectiveButton == BTN_RIGHT) {
++        if (effectiveState != WL_POINTER_BUTTON_STATE_PRESSED)
++            return true;
++
++        updateHoveredFromPointer(false, false, false, false, "mouse-button-right");
++        const auto hovered = m_state.hoveredIndex ? m_state.hoveredIndex : cachedHoveredIndex;
++        if (hovered && *hovered < m_state.windows.size()) {
++            openContextMenu(*hovered, pointerBeforeUpdate);
++            return true;
++        }
++
++        closeContextMenu();
++        return true;
++    }
++
++    if (m_contextMenu.open) {
++        if (effectiveState == WL_POINTER_BUTTON_STATE_PRESSED) {
++            if (const auto item = hitTestContextMenuItem(pointerBeforeUpdate.x, pointerBeforeUpdate.y)) {
++                const auto action = static_cast<ContextMenuAction>(*item);
++                PHLWINDOW window;
++                if (m_contextMenu.windowIndex && *m_contextMenu.windowIndex < m_state.windows.size())
++                    window = m_state.windows[*m_contextMenu.windowIndex].window;
++                closeContextMenu();
++                if (window)
++                    runContextMenuAction(action, window);
++                return true;
++            }
++            closeContextMenu();
++            // Fall through so a left click outside the menu can still activate/close overview.
++        } else {
++            return true;
++        }
++    }
++
+     if (effectiveState == WL_POINTER_BUTTON_STATE_PRESSED)
+         m_primaryButtonPressed = true;
+     else if (effectiveState == WL_POINTER_BUTTON_STATE_RELEASED)
+@@ -3097,6 +3157,15 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
+     if (m_state.phase == Phase::Closing)
+         return;
+ 
++    if (m_contextMenu.open && event.state == WL_KEYBOARD_KEY_STATE_PRESSED) {
++        const auto keySym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
++        if (keySym == XKB_KEY_Escape) {
++            closeContextMenu();
++            info.cancelled = true;
++            return;
++        }
++    }
++
+     if (m_toggleSwitchSessionActive && event.state == WL_KEYBOARD_KEY_STATE_RELEASED && isSwitchReleaseEvent(event, keyboard)) {
+         if (debugLogsEnabled()) {
+             std::ostringstream out;
+@@ -4378,6 +4447,14 @@ double OverviewController::closeButtonSize() const {
+ 
+ double OverviewController::closeButtonInset() const {
+     return static_cast<double>(getConfigInt(m_handle, "plugin:hymission:close_button_inset", 0));
++
++bool OverviewController::showWindowIconsEnabled() const {
++    return getConfigInt(m_handle, "plugin:hymission:show_window_icons", 1) != 0;
++}
++
++bool OverviewController::showWindowTitlesEnabled() const {
++    return getConfigInt(m_handle, "plugin:hymission:show_window_titles", 1) != 0;
++}
+ }
+ 
+ bool OverviewController::niriModeEnabled() const {
+@@ -8794,11 +8871,16 @@ std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y)
+             if (managed.isNiriFloatingOverlay != floatingOverlay)
+                 continue;
+ 
+-            const Rect rect = currentPreviewRect(managed);
+-            if (!rectContainsPoint(rect, x, y))
++            // Use stable slot geometry while expand-selected relayout is animating.
++            // currentPreviewRect() lerps every frame and makes hover flicker under the cursor.
++            const Rect preview = m_state.relayoutActive ? managed.targetGlobal : currentPreviewRect(managed);
++            const Rect chrome = windowLabelChromeGlobal(managed);
++            const bool inPreview = rectContainsPoint(preview, x, y);
++            const bool inChrome = (showWindowIconsEnabled() || showWindowTitlesEnabled()) && rectContainsPoint(chrome, x, y);
++            if (!inPreview && !inChrome)
+                 continue;
+ 
+-            const double distance = rectCenterDistanceSquared(rect, x, y);
++            const double distance = rectCenterDistanceSquared(preview, x, y);
+             if (!bestIndex || distance < bestDistance) {
+                 bestIndex = index;
+                 bestDistance = distance;
+@@ -10749,6 +10831,8 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
+ }
+ 
+ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVisualOverride, bool deferFullscreenMutations) {
++    closeContextMenu();
++
+     if (!isVisible())
+         return;
+ 
+@@ -11752,6 +11836,9 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow,
+             .window = source.window,
+             .targetMonitor = source.targetMonitor,
+             .title = source.title,
++            .appClass = source.appClass,
++            .appName = source.appName,
++            .iconName = source.iconName,
+             .naturalGlobal = previewRect,
+             .exitGlobal = previewRect,
+             .relayoutFromGlobal = previewRect,
+@@ -12601,14 +12688,16 @@ void OverviewController::renderSelectionChrome() const {
+             const Rect  rectGlobal = currentPreviewRect(window);
+             const Rect  rect = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
+             renderOutline(rectGlobal, colorWithAlphaMultiplier(focusSelectedColor(), progress), focusSelectedThickness());
+-            auto texture =
+-                g_pHyprRenderer->renderText(window.title, colorWithAlphaMultiplier(focusTitleColor(), progress), scaleFontSizeForRender(renderMonitor, 16), false, "",
+-                                            static_cast<int>(rect.width));
+-            if (texture) {
+-                const Rect titleRect =
+-                    makeRect(rect.x, std::max(scaleLengthForRender(renderMonitor, 8.0), rect.y - texture->m_size.y - scaleLengthForRender(renderMonitor, TITLE_PADDING)),
+-                             texture->m_size.x, texture->m_size.y);
+-                g_pHyprOpenGL->renderTexture(texture, toBox(titleRect), {});
++            if (!showWindowTitlesEnabled() && !showWindowIconsEnabled()) {
++                auto texture =
++                    g_pHyprRenderer->renderText(window.title, colorWithAlphaMultiplier(focusTitleColor(), progress), scaleFontSizeForRender(renderMonitor, 16), false, "",
++                                                static_cast<int>(rect.width));
++                if (texture) {
++                    const Rect titleRect =
++                        makeRect(rect.x, std::max(scaleLengthForRender(renderMonitor, 8.0), rect.y - texture->m_size.y - scaleLengthForRender(renderMonitor, TITLE_PADDING)),
++                                 texture->m_size.x, texture->m_size.y);
++                    g_pHyprOpenGL->renderTexture(texture, toBox(titleRect), {});
++                }
+             }
+         }
+     }
+@@ -12851,6 +12940,230 @@ void OverviewController::renderCloseButtons() const {
+     }
+ }
+ 
++Rect OverviewController::windowLabelChromeGlobal(const ManagedWindow& managed) const {
++    const Rect preview = m_state.relayoutActive ? managed.targetGlobal : currentPreviewRect(managed);
++    const double iconSize = WINDOW_ICON_SIZE;
++    const double titleReserve = showWindowTitlesEnabled() ? 18.0 : 0.0;
++    const double height = iconSize + WINDOW_ICON_GAP + (titleReserve > 0.0 ? titleReserve + WINDOW_TITLE_GAP : 0.0);
++    return makeRect(preview.x, preview.y - height, preview.width, height);
++}
++
++void OverviewController::renderWindowLabels() const {
++    const double progress = visualProgress();
++    if (progress <= 0.0)
++        return;
++    if (!showWindowIconsEnabled() && !showWindowTitlesEnabled())
++        return;
++
++    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
++    if (!renderMonitor)
++        return;
++
++    const bool showIcons = showWindowIconsEnabled();
++    const bool showTitles = showWindowTitlesEnabled();
++    const double iconLogical = WINDOW_ICON_SIZE;
++    const double iconRender = scaleLengthForRender(renderMonitor, iconLogical);
++    const int iconPixels = std::max(1, static_cast<int>(std::lround(iconRender)));
++
++    for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
++        const auto& managed = m_state.windows[index];
++        if (!managed.targetMonitor || managed.targetMonitor != renderMonitor)
++            continue;
++
++        const Rect previewGlobal = currentPreviewRect(managed);
++        const Rect preview = rectToMonitorRenderLocal(previewGlobal, renderMonitor);
++        const double alpha = std::min(1.0, progress) * managed.previewAlpha;
++        if (alpha <= 0.01)
++            continue;
++
++        double cursorY = preview.y - scaleLengthForRender(renderMonitor, WINDOW_ICON_GAP);
++
++        if (showIcons) {
++            AppIdentity identity{
++                .appClass = managed.appClass,
++                .appName = managed.appName,
++                .iconName = !managed.iconName.empty() ? managed.iconName : managed.appClass,
++            };
++
++            auto icon = m_appIconCache.textureFor(identity, iconPixels);
++            if (icon) {
++                const double iconW = icon->m_size.x;
++                const double iconH = icon->m_size.y;
++                const Rect iconRect = makeRect(preview.x + (preview.width - iconW) * 0.5, cursorY - iconH, iconW, iconH);
++                Render::GL::g_pHyprOpenGL->renderTexture(icon, toBox(iconRect), {.a = static_cast<float>(alpha)});
++                cursorY = iconRect.y - scaleLengthForRender(renderMonitor, WINDOW_TITLE_GAP);
++            } else {
++                // Fallback glyph: rounded square with first letter.
++                const Rect badge = makeRect(preview.x + (preview.width - iconRender) * 0.5, cursorY - iconRender, iconRender, iconRender);
++                Render::GL::g_pHyprOpenGL->renderRect(toBox(badge), CHyprColor(0.18, 0.22, 0.28, 0.85 * alpha), {.round = static_cast<int>(iconRender * 0.22)});
++                const std::string letter = managed.appName.empty() ? "?" : managed.appName.substr(0, 1);
++                if (auto letterTex = g_pHyprRenderer->renderText(letter, CHyprColor(1.0, 1.0, 1.0, alpha), scaleFontSizeForRender(renderMonitor, 16), false, "",
++                                                                static_cast<int>(iconRender))) {
++                    const Rect letterRect = makeRect(badge.x + (badge.width - letterTex->m_size.x) * 0.5, badge.y + (badge.height - letterTex->m_size.y) * 0.5,
++                                                     letterTex->m_size.x, letterTex->m_size.y);
++                    Render::GL::g_pHyprOpenGL->renderTexture(letterTex, toBox(letterRect), {});
++                }
++                cursorY = badge.y - scaleLengthForRender(renderMonitor, WINDOW_TITLE_GAP);
++            }
++        }
++
++        const bool revealTitle = showTitles && ((m_state.hoveredIndex && *m_state.hoveredIndex == index) || (m_state.selectedIndex && *m_state.selectedIndex == index) ||
++                                                (m_contextMenu.open && m_contextMenu.windowIndex && *m_contextMenu.windowIndex == index));
++        if (!revealTitle)
++            continue;
++
++        const std::string label = !managed.appName.empty() ? managed.appName : managed.title;
++        if (label.empty())
++            continue;
++
++        auto titleTex = g_pHyprRenderer->renderText(label, CHyprColor(1.0, 1.0, 1.0, alpha), scaleFontSizeForRender(renderMonitor, 14), false, "",
++                                                   static_cast<int>(preview.width));
++        if (!titleTex)
++            continue;
++
++        const Rect titleRect = makeRect(preview.x + (preview.width - titleTex->m_size.x) * 0.5,
++                                        std::max(scaleLengthForRender(renderMonitor, 4.0), cursorY - titleTex->m_size.y), titleTex->m_size.x, titleTex->m_size.y);
++        Render::GL::g_pHyprOpenGL->renderTexture(titleTex, toBox(titleRect), {});
++    }
++}
++
++namespace {
++const char* contextMenuLabel(std::size_t actionIndex) {
++    static constexpr const char* kLabels[] = {
++        "Close", "Force Quit", "Minimize", "Toggle Fullscreen", "Toggle Floating", "Toggle Pin",
++    };
++    return actionIndex < std::size(kLabels) ? kLabels[actionIndex] : "";
++}
++} // namespace
++
++void OverviewController::openContextMenu(std::size_t windowIndex, const Vector2D& pointer) {
++    if (windowIndex >= m_state.windows.size())
++        return;
++
++    m_state.selectedIndex = windowIndex;
++    m_state.focusDuringOverview = m_state.windows[windowIndex].window;
++    m_contextMenu.open = true;
++    m_contextMenu.windowIndex = windowIndex;
++    m_contextMenu.anchor = pointer;
++    m_contextMenu.hoveredItem.reset();
++
++    const auto monitor = m_state.windows[windowIndex].targetMonitor;
++    const double itemHeight = CONTEXT_MENU_ITEM_HEIGHT;
++    const double width = CONTEXT_MENU_MIN_WIDTH;
++    const double height = CONTEXT_MENU_PADDING_Y * 2.0 + itemHeight * static_cast<double>(static_cast<int>(ContextMenuAction::Count));
++    double x = pointer.x;
++    double y = pointer.y;
++    if (monitor) {
++        const double maxX = monitor->m_position.x + monitor->m_size.x - width - 8.0;
++        const double maxY = monitor->m_position.y + monitor->m_size.y - height - 8.0;
++        x = std::clamp(x, monitor->m_position.x + 8.0, std::max(monitor->m_position.x + 8.0, maxX));
++        y = std::clamp(y, monitor->m_position.y + 8.0, std::max(monitor->m_position.y + 8.0, maxY));
++    }
++    m_contextMenu.rect = makeRect(x, y, width, height);
++    damageOwnedMonitors();
++}
++
++void OverviewController::closeContextMenu() {
++    if (!m_contextMenu.open)
++        return;
++    m_contextMenu = {};
++    damageOwnedMonitors();
++}
++
++std::optional<std::size_t> OverviewController::hitTestContextMenuItem(double x, double y) const {
++    if (!m_contextMenu.open || !rectContainsPoint(m_contextMenu.rect, x, y))
++        return std::nullopt;
++
++    const double localY = y - m_contextMenu.rect.y - CONTEXT_MENU_PADDING_Y;
++    if (localY < 0.0)
++        return std::nullopt;
++    const auto index = static_cast<std::size_t>(localY / CONTEXT_MENU_ITEM_HEIGHT);
++    if (index >= static_cast<std::size_t>(ContextMenuAction::Count))
++        return std::nullopt;
++    return index;
++}
++
++void OverviewController::runContextMenuAction(ContextMenuAction action, const PHLWINDOW& window) {
++    if (!window || !g_pKeybindManager)
++        return;
++
++    const auto address = std::format("address:0x{:x}", reinterpret_cast<uintptr_t>(window.get()));
++    auto dispatch = [&](const char* name, const std::string& args) {
++        const auto it = g_pKeybindManager->m_dispatchers.find(name);
++        if (it == g_pKeybindManager->m_dispatchers.end())
++            return;
++        it->second(args);
++    };
++
++    switch (action) {
++        case ContextMenuAction::Close:
++            (void)Config::Actions::closeWindow(window);
++            break;
++        case ContextMenuAction::ForceQuit:
++            (void)Config::Actions::killWindow(window);
++            break;
++        case ContextMenuAction::Minimize:
++            dispatch("movetoworkspacesilent", "special:minimized," + address);
++            break;
++        case ContextMenuAction::ToggleFullscreen:
++            dispatch("focuswindow", address);
++            dispatch("fullscreen", "0");
++            break;
++        case ContextMenuAction::ToggleFloating:
++            (void)Config::Actions::floatWindow(Config::Actions::TOGGLE_ACTION_TOGGLE, window);
++            break;
++        case ContextMenuAction::TogglePin:
++            (void)Config::Actions::pinWindow(Config::Actions::TOGGLE_ACTION_TOGGLE, window);
++            break;
++        case ContextMenuAction::Count:
++            break;
++    }
++
++    damageOwnedMonitors();
++}
++
++void OverviewController::renderContextMenu() const {
++    if (!m_contextMenu.open)
++        return;
++
++    const double progress = visualProgress();
++    if (progress <= 0.0)
++        return;
++
++    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
++    if (!renderMonitor)
++        return;
++
++    if (m_contextMenu.windowIndex && *m_contextMenu.windowIndex < m_state.windows.size()) {
++        const auto& managed = m_state.windows[*m_contextMenu.windowIndex];
++        if (managed.targetMonitor && managed.targetMonitor != renderMonitor)
++            return;
++    }
++
++    const Rect local = rectToMonitorRenderLocal(m_contextMenu.rect, renderMonitor);
++    Render::GL::g_pHyprOpenGL->renderRect(toBox(local), CHyprColor(0.10, 0.11, 0.14, 0.94 * progress),
++                                          {.round = static_cast<int>(scaleLengthForRender(renderMonitor, 8.0))});
++
++    const double itemHeight = scaleLengthForRender(renderMonitor, CONTEXT_MENU_ITEM_HEIGHT);
++    const double padX = scaleLengthForRender(renderMonitor, CONTEXT_MENU_PADDING_X);
++    const double padY = scaleLengthForRender(renderMonitor, CONTEXT_MENU_PADDING_Y);
++    const int fontSize = scaleFontSizeForRender(renderMonitor, CONTEXT_MENU_FONT_SIZE);
++
++    for (std::size_t itemIndex = 0; itemIndex < static_cast<std::size_t>(ContextMenuAction::Count); ++itemIndex) {
++        const Rect item = makeRect(local.x, local.y + padY + itemHeight * static_cast<double>(itemIndex), local.width, itemHeight);
++        const bool hovered = m_contextMenu.hoveredItem && *m_contextMenu.hoveredItem == itemIndex;
++        if (hovered)
++            Render::GL::g_pHyprOpenGL->renderRect(toBox(item), CHyprColor(0.24, 0.48, 0.78, 0.55 * progress),
++                                                  {.round = static_cast<int>(scaleLengthForRender(renderMonitor, 4.0))});
++
++        if (auto text = g_pHyprRenderer->renderText(contextMenuLabel(itemIndex), CHyprColor(1.0, 1.0, 1.0, progress), fontSize, false, "",
++                                                   static_cast<int>(std::max(8.0, item.width - padX * 2.0)))) {
++            const Rect textRect = makeRect(item.x + padX, item.y + (item.height - text->m_size.y) * 0.5, text->m_size.x, text->m_size.y);
++            Render::GL::g_pHyprOpenGL->renderTexture(text, toBox(textRect), {});
++        }
++    }
++}
++
+ void OverviewController::renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const {
+     const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+     if (!renderMonitor)
+@@ -14060,6 +14373,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
+             .window = window,
+             .targetMonitor = targetMonitor,
+             .title = window->m_title,
++            .appClass = window->m_class,
++            .appName = {},
++            .iconName = {},
+             .naturalGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
+             .exitGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
+             .previewAlpha = overviewPreviewAlphaForWindow(window),
+@@ -14068,6 +14384,14 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
+             .isNiriFloatingOverlay = directNiriFloatingOverlay,
+         });
+ 
++        {
++            auto& managed = state.windows.back();
++            const auto identity = resolveAppIdentity(window->m_class, window->m_initialClass, window->m_title);
++            managed.appClass = identity.appClass;
++            managed.appName = identity.appName;
++            managed.iconName = identity.iconName;
++        }
++
+         if (directNiriSlot) {
+             auto& managed = state.windows.back();
+             managed.slot = slotWithBorderOuterTarget(window, targetMonitor, *directNiriSlot);
+diff --git a/src/overview_controller.hpp b/src/overview_controller.hpp
+index 359d0d9..eb008f9 100644
+--- a/src/overview_controller.hpp
++++ b/src/overview_controller.hpp
+@@ -35,6 +35,7 @@
+ 
+ #include "mission_layout.hpp"
+ #include "overview_logic.hpp"
++#include "app_icon.hpp"
+ 
+ class CEventLoopTimer;
+ 
+@@ -183,6 +184,9 @@ class OverviewController {
+         PHLWINDOW    window;
+         PHLMONITOR   targetMonitor;
+         std::string  title;
++        std::string  appClass;
++        std::string  appName;
++        std::string  iconName;
+         Rect         naturalGlobal;
+         Rect         exitGlobal;
+         Rect         relayoutFromGlobal;
+@@ -194,6 +198,24 @@ class OverviewController {
+         bool         isNiriFloatingOverlay = false;
+     };
+ 
++    enum class ContextMenuAction : uint8_t {
++        Close = 0,
++        ForceQuit,
++        Minimize,
++        ToggleFullscreen,
++        ToggleFloating,
++        TogglePin,
++        Count,
++    };
++
++    struct ContextMenuState {
++        bool                       open = false;
++        std::optional<std::size_t> windowIndex;
++        Vector2D                   anchor;
++        Rect                       rect;
++        std::optional<std::size_t> hoveredItem;
++    };
++
+     struct WorkspaceStripEntry {
+         struct Snapshot {
+             SP<Render::IFramebuffer> framebuffer;
+@@ -801,7 +823,16 @@ class OverviewController {
+     void renderDraggedWindowPreview() const;
+     void captureDraggedWindowTexture();
+     void renderPickLabels() const;
++    void renderWindowLabels() const;
++    void renderContextMenu() const;
+     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
++    [[nodiscard]] Rect windowLabelChromeGlobal(const ManagedWindow& managed) const;
++    [[nodiscard]] bool showWindowIconsEnabled() const;
++    [[nodiscard]] bool showWindowTitlesEnabled() const;
++    void openContextMenu(std::size_t windowIndex, const Vector2D& pointer);
++    void closeContextMenu();
++    [[nodiscard]] std::optional<std::size_t> hitTestContextMenuItem(double x, double y) const;
++    void runContextMenuAction(ContextMenuAction action, const PHLWINDOW& window);
+     void activateStripTarget(std::size_t index);
+     void clearStripWindowDragState();
+     void clearPendingStripWorkspaceChange();
+@@ -962,6 +993,9 @@ class OverviewController {
+     bool                      m_suppressInitialHoverUpdate = false;
+     PHLANIMVAR<float>         m_relayoutProgressAnimation;
+     std::size_t               m_postOpenRefreshFrames = 0;
++    bool                      m_pendingToggleSwitchAutoNext = false;
++    ContextMenuState          m_contextMenu;
++    mutable AppIconCache      m_appIconCache;
+ 
+     CHyprSignalListener       m_renderStageListener;
+     CHyprSignalListener       m_mouseMoveListener;
+-- 
+2.55.0
+

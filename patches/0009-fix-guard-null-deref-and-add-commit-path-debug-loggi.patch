@@ -1,0 +1,64 @@
+From ac49861031e730768eec7935799440a594937ea0 Mon Sep 17 00:00:00 2001
+From: Robbie P <rpupo63@gmail.com>
+Date: Mon, 27 Jul 2026 23:04:17 -0400
+Subject: [PATCH 09/11] fix: guard null deref and add commit-path debug logging
+ for workspace swipe crash
+
+- Line 5849: use transitionWorkspace->m_id instead of monitor->m_activeWorkspace->m_id
+  (transitionWorkspace is already null-checked via ternary at 5838; m_activeWorkspace
+  can be null under Hyprland 0.56 workspace state transitions)
+- Line 6402: guard g_layoutManager before recalculateMonitor, consistent with line 4850
+- Add debug log breadcrumbs around changeWorkspace/recalculateMonitor/frameTick in
+  commitOverviewWorkspaceTransition to pinpoint crash site on next failure
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+---
+ src/overview_controller.cpp | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/overview_controller.cpp b/src/overview_controller.cpp
+index 5027857..4e6e608 100644
+--- a/src/overview_controller.cpp
++++ b/src/overview_controller.cpp
+@@ -5846,7 +5846,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
+         .mode = mode,
+         .distance = workspaceSwipeViewportDistance(monitor, transitionAxis),
+         .delta = 0.0,
+-        .step = workspaceId > monitor->m_activeWorkspace->m_id ? 1 : -1,
++        .step = workspaceId > transitionWorkspace->m_id ? 1 : -1,
+         .initialDirection = 0,
+         .avgSpeed = 0.0,
+         .speedPoints = 0,
+@@ -6380,7 +6380,11 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
+             }
+         }
+ 
++        if (debugLogsEnabled())
++            debugLog("[hymission] commitOverviewWorkspaceTransition: calling changeWorkspace id=" + std::to_string(targetWorkspaceId));
+         transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
++        if (debugLogsEnabled())
++            debugLog("[hymission] commitOverviewWorkspaceTransition: changeWorkspace done");
+ 
+         if (oldWorkspace && oldWorkspace != targetWorkspace) {
+             for (const auto& window : Desktop::viewState()->windows()) {
+@@ -6399,9 +6403,16 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
+         // remains visually shifted after the overview transition commits.
+         targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
+         targetWorkspace->m_alpha->setValueAndWarp(1.F);
+-        g_layoutManager->recalculateMonitor(transitionMonitor);
++        if (debugLogsEnabled())
++            debugLog("[hymission] commitOverviewWorkspaceTransition: recalculateMonitor");
++        if (g_layoutManager)
++            g_layoutManager->recalculateMonitor(transitionMonitor);
++        if (debugLogsEnabled())
++            debugLog("[hymission] commitOverviewWorkspaceTransition: frameTick");
+         if (Animation::mgr())
+             Animation::mgr()->frameTick();
++        if (debugLogsEnabled())
++            debugLog("[hymission] commitOverviewWorkspaceTransition: enforcing visibility");
+ 
+         normalizeActiveWorkspacePresentation(transitionMonitor);
+         applyOverviewWorkspaceRenderOffsetFreeze();
+-- 
+2.55.0
+

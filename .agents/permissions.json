@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "repo": "rpupo63/hymission",
+  "updated_at": "2026-07-28T18:38:29Z",
+  "allow": [
+    "Bash(echo \"exit: $?\")",
+    "Bash(git -C /tmp/hymission-dev log --oneline -5)",
+    "Bash(git fetch *)",
+    "Bash(hyprctl keyword *)",
+    "Bash(hyprctl plugin *)",
+    "Bash(hyprctl plugins *)",
+    "Bash(hyprctl version *)",
+    "Bash(hyprpm list *)",
+    "Bash(ldconfig -p)",
+    "Bash(ldd /home/beto/Projects/hymission/build-cmake/libhymission.so)",
+    "Bash(pacman -Q aquamarine)",
+    "Bash(pacman -Q hyprland)",
+    "Read(//home/beto/**)",
+    "Read(//home/beto/.config/hyprpm/**)",
+    "Read(//tmp/hymission-dev/**)",
+    "Read(//tmp/hymission-dev/build-cmake/**)",
+    "Read(//usr/lib/**)"
+  ],
+  "deny": [],
+  "notes": []
+}
