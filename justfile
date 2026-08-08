@@ -91,13 +91,18 @@ _context-lint:
 
 _repo-check:
     #!/usr/bin/env bash
-    ran=0
-    failed=0
-    if [[ -f pyproject.toml ]] && command -v pytest >/dev/null 2>&1; then
-      ran=1
-      pytest -q || failed=1
+    set -euo pipefail
+    # Standalone unit tests (no hyprland plugin link) — real compile+run signal.
+    if ! command -v g++ >/dev/null 2>&1; then
+      echo "just check: g++ not on PATH" >&2
+      exit 1
     fi
-    if [[ $ran -eq 0 ]]; then
-      echo "just check: no repo-specific checks configured (OK)"
-    fi
-    exit "$failed"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    g++ -std=c++23 -Isrc -O0 -g -o "$tmp/mission_layout_test" \
+      tools/mission_layout_test.cpp src/mission_layout.cpp
+    g++ -std=c++23 -Isrc -O0 -g -o "$tmp/overview_logic_test" \
+      tools/overview_logic_test.cpp src/overview_logic.cpp
+    "$tmp/mission_layout_test"
+    "$tmp/overview_logic_test"
+    echo "hymission unit tests OK"
