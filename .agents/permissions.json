@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repo": "rpupo63/hymission",
-  "updated_at": "2026-07-28T18:38:29Z",
+  "updated_at": "2026-08-08T02:30:23Z",
   "allow": [
     "Bash(echo \"exit: $?\")",
     "Bash(git -C /tmp/hymission-dev log --oneline -5)",
@@ -21,6 +21,16 @@
     "Read(//tmp/hymission-dev/build-cmake/**)",
     "Read(//usr/lib/**)"
   ],
-  "deny": [],
+  "deny": [
+    "Bash(dd *)",
+    "Bash(mkfs *)",
+    "Bash(parted *)",
+    "Bash(sfdisk *)",
+    "Bash(wipefs *)",
+    "Bash(rclone sync *)",
+    "Bash(pacman -Syu*)",
+    "Bash(git checkout -f ~/*)",
+    "Bash(git checkout -f $HOME/*)"
+  ],
   "notes": []
 }
