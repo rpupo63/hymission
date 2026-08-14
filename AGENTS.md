@@ -11,13 +11,27 @@ Fork of `wilf`'s hymission (`upstream` remote); `origin` is `rpupo63/hymission`.
 ## How it is actually loaded on this machine
 
 **Not by hyprpm.** As of 2026-08-13 `hyprpm list` is empty and `~/.local/share/hyprpm/`
-does not exist. The load path is a single idempotent `exec` in
+does not exist. The load path is `exec = ~/.config/hypr/scripts/hymission-load` in
 `~/.config/hypr/autostart.conf`, which runs at startup *and* on every config reload:
 
 1. `hyprctl plugin load /home/beto/Projects/hymission/build-cmake/libhymission.so`
    — only if the plugin isn't already loaded.
 2. `hyprctl keyword source ~/.config/hypr/hymission-setup.conf`
    — only if a reload wiped the dynamic keywords.
+
+**Both steps are taken under `flock`, and that is not decoration.** Hyprland runs `exec`
+on the initial config parse *and* again on omarchy's post-login theme reload, so at cold
+boot two copies overlap. When the guards were inline `||` checks, both copies saw zero
+binds and both sourced the file: two `SUPER+grave` binds, and two copies of
+`gesture = 3, vertical, dispatcher, hymission:toggle`, which makes a 3-finger vertical
+swipe toggle the overview twice and look dead. A warm `hyprctl reload` never reproduces
+it — the two calls are far enough apart that check-then-act works. Diagnosed on the
+2026-08-13 reboot, after the warm-session test said the config was fine.
+
+`unbind` would not have been enough: Hyprland has no unbind for `gesture`, and
+`hyprctl gestures` returns `unknown request`, so the doubled gesture is neither
+removable nor observable. Serializing is what fixes both halves. The loader logs to
+`journalctl --user -t hymission-load` and self-checks the resulting bind count.
 
 The runtime `plugin { hymission { … } }` block and the `SUPER+grave` bind live in
 **`~/.config/hypr/hymission-setup.conf`**. They cannot go in a statically-sourced file:
