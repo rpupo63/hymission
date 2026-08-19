@@ -14,7 +14,7 @@ Fork of `wilf`'s hymission (`upstream` remote); `origin` is `rpupo63/hymission`.
 does not exist. The load path is `exec = ~/.config/hypr/scripts/hymission-load` in
 `~/.config/hypr/autostart.conf`, which runs at startup *and* on every config reload:
 
-1. `hyprctl plugin load /home/beto/Projects/hymission/build-cmake/libhymission.so`
+1. `hyprctl plugin load /home/beto/Projects/quality-of-life-laptop-improvements/hymission/build-cmake/libhymission.so`
    — only if the plugin isn't already loaded.
 2. `hyprctl keyword source ~/.config/hypr/hymission-setup.conf`
    — only if a reload wiped the dynamic keywords.

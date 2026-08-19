@@ -12,7 +12,7 @@
     "Bash(hyprctl version *)",
     "Bash(hyprpm list *)",
     "Bash(ldconfig -p)",
-    "Bash(ldd /home/beto/Projects/hymission/build-cmake/libhymission.so)",
+    "Bash(ldd /home/beto/Projects/quality-of-life-laptop-improvements/hymission/build-cmake/libhymission.so)",
     "Bash(pacman -Q aquamarine)",
     "Bash(pacman -Q hyprland)",
     "Read(//home/beto/**)",
