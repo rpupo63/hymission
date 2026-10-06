@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "overview_logic.hpp"
@@ -335,6 +337,32 @@ int main() {
                  "continuous empty-mode should not expand named workspace ids");
     ok &= expect(expandWorkspaceStripWorkspaceIds({}, WorkspaceStripEmptyMode::Continuous).empty(),
                  "empty workspace id sets should stay empty");
+
+    ok &= expect(parseNumericWorkspaceName("-3") == std::optional<long>{-3}, "numeric workspace names should parse negatives");
+    ok &= expect(parseNumericWorkspaceName("0") == std::optional<long>{0}, "numeric workspace names should parse zero");
+    ok &= expect(parseNumericWorkspaceName("2") == std::optional<long>{2}, "numeric workspace names should parse positives");
+    ok &= expect(!parseNumericWorkspaceName("special").has_value(), "non-numeric workspace names should not parse");
+    ok &= expect(!parseNumericWorkspaceName("-").has_value(), "a bare minus sign should not parse as a workspace name");
+    ok &= expect(namedNumericWorkspaceNeedsNameSwipe("-1"), "negative named workspaces need name-order swipes");
+    ok &= expect(namedNumericWorkspaceNeedsNameSwipe("0"), "workspace 0 needs name-order swipes because Hyprland hashes its id");
+    ok &= expect(!namedNumericWorkspaceNeedsNameSwipe("1"), "positive numbered workspaces can keep native id-order swipes");
+    ok &= expect(numericWorkspaceDispatchArg(-1) == "name:-1", "negative workspace dispatch must use the name: prefix");
+    ok &= expect(numericWorkspaceDispatchArg(0) == "name:0", "workspace 0 dispatch must use the name: prefix");
+    ok &= expect(numericWorkspaceDispatchArg(2) == "2", "positive workspace dispatch can use the numeric id");
+    {
+        // Live hashed ids on this machine: -2=-1341, -1=-1340, -3=-1339, 0=-1337.
+        // Native r+/-1 walks that id order, so a one-step swipe skips -1->-3 and -3->0.
+        std::vector<std::string> hashedIdOrder = {"-2", "-1", "-3", "0"};
+        std::sort(hashedIdOrder.begin(), hashedIdOrder.end(), numericWorkspaceNameLess);
+        ok &= expect(hashedIdOrder == std::vector<std::string>({"-3", "-2", "-1", "0"}),
+                     "0/negative named workspaces must sort by numeric name, not hashed id");
+        ok &= expect(workspaceStepFromNumericNamesOrIds("-1", -1340, "-3", -1339) == -1,
+                     "name-order step from -1 to -3 is lower even though hashed id increased");
+        ok &= expect(workspaceStepFromNumericNamesOrIds("-3", -1339, "-2", -1341) == 1,
+                     "name-order step from -3 to -2 is higher even though hashed id decreased");
+        ok &= expect(workspaceStepFromNumericNamesOrIds("-1", -1340, "0", -1337) == 1,
+                     "name-order step from -1 to 0 should move up one workspace");
+    }
 
     ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Top, 40, 12),
                             {

@@ -1868,6 +1868,13 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
             return;
         }
 
+        // Named 0/negative workspaces get hashed ids (e.g. name -1 -> id -1340).
+        // Native r+/-1 walks that id order, so a one-step swipe can skip -1 -> -3.
+        if (namedNumericWorkspaceNeedsNameSwipe(m_nativeBeginWsName)) {
+            m_mode = Mode::NamedNumeric;
+            return;
+        }
+
         m_nativeGesture.begin(e);
     }
 
@@ -1883,6 +1890,9 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
 
         m_nativeLastFrame = distance(e);
         m_nativeRawTravel += m_nativeLastFrame;
+        if (m_mode == Mode::NamedNumeric)
+            return;
+
         m_nativeGesture.update(e);
     }
 
@@ -1896,12 +1906,13 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
             return;
         }
 
-        m_nativeGesture.end(e);
+        const bool namedNumeric = m_mode == Mode::NamedNumeric;
+        if (!namedNumeric)
+            m_nativeGesture.end(e);
         m_mode = Mode::Native;
 
-        // Native swipe (with workspace_swipe_use_r) only reaches positive numeric
-        // workspaces. Hand off at the edge so a swipe can step into 0/negative
-        // named workspaces too.
+        // Native swipe (with workspace_swipe_use_r) orders by hashed workspace id,
+        // so 0/negative named workspaces are owned here and stepped by numeric name.
         if (g_controller)
             g_controller->handleNativeWorkspaceSwipeBoundary(m_nativeBeginWsName, m_nativeRawTravel, m_nativeLastFrame, e.swipe ? e.swipe->cancelled : true);
     }
@@ -1913,6 +1924,7 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
   private:
     enum class Mode {
         Native,
+        NamedNumeric,
         Overview,
         Blocked,
     };
@@ -2955,6 +2967,9 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         if (effectiveState != WL_POINTER_BUTTON_STATE_PRESSED)
             return true;
 
+        if (disableContextMenuEnabled())
+            return true;
+
         updateHoveredFromPointer(false, false, false, false, "mouse-button-right");
         const auto hovered = m_state.hoveredIndex ? m_state.hoveredIndex : cachedHoveredIndex;
         if (hovered && *hovered < m_state.windows.size()) {
@@ -3214,7 +3229,7 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
             break;
     }
 
-    if (handled)
+    if (handled || missionControlModeEnabled())
         info.cancelled = true;
 }
 
@@ -4255,6 +4270,8 @@ std::optional<OverviewController::ScopeOverride> OverviewController::parseScopeO
 bool OverviewController::expandSelectedWindowEnabled() const {
     if (m_state.engine == LayoutEngine::Thumbnail)
         return false;
+    if (missionControlModeEnabled())
+        return true;
     return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 1) != 0;
 }
 
@@ -4275,7 +4292,19 @@ double OverviewController::hoverExpandScale() const {
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
+    if (missionControlModeEnabled())
+        return true;
     return getConfigInt(m_handle, "plugin:hymission:overview_focus_follows_mouse", 1) != 0;
+}
+
+bool OverviewController::missionControlModeEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:mission_control_mode", 1) != 0;
+}
+
+bool OverviewController::disableContextMenuEnabled() const {
+    if (missionControlModeEnabled())
+        return true;
+    return getConfigInt(m_handle, "plugin:hymission:disable_context_menu", 0) != 0;
 }
 
 bool OverviewController::multiWorkspaceSortRecentFirstEnabled() const {
@@ -4459,6 +4488,8 @@ bool OverviewController::windowDecorationsEnabled() const {
 }
 
 bool OverviewController::closeButtonsEnabled() const {
+    if (missionControlModeEnabled())
+        return false;
     return getConfigInt(m_handle, "plugin:hymission:close_button_enabled", 0) != 0;
 }
 
@@ -4928,6 +4959,37 @@ bool OverviewController::resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& 
 
     if (!monitor || step == 0 || !monitor->m_activeWorkspace || monitor->m_activeWorkspace->m_isSpecialWorkspace)
         return false;
+
+    const auto currentNumeric = parseNumericWorkspaceName(monitor->m_activeWorkspace->m_name);
+    if (currentNumeric && *currentNumeric <= 0) {
+        const long        target = *currentNumeric + (step < 0 ? -1 : 1);
+        const std::string targetArg = numericWorkspaceDispatchArg(target);
+        auto              resolved = getWorkspaceIDNameFromString(targetArg);
+        workspace = ::State::workspaceState()->query().id(resolved.id).run();
+        if (!workspace) {
+            for (const auto& candidate : workspaceStateWorkspaces()) {
+                if (candidate && parseNumericWorkspaceName(candidate->m_name) == target) {
+                    workspace = candidate;
+                    break;
+                }
+            }
+        }
+
+        if (workspace) {
+            workspaceId = workspace->m_id;
+            workspaceName = workspace->m_name;
+            syntheticEmpty = false;
+            return workspaceId != monitor->m_activeWorkspace->m_id;
+        }
+
+        if (!gestureSwipeCreateNewEnabled())
+            return false;
+
+        workspaceName = std::to_string(target);
+        workspaceId = resolved.id != WORKSPACE_INVALID ? resolved.id : WORKSPACE_INVALID;
+        syntheticEmpty = true;
+        return true;
+    }
 
     const bool        useRelative = gestureSwipeUseRelativeEnabled();
     const std::string selector = step < 0 ? (useRelative ? "r-1" : "m-1") : (useRelative ? "r+1" : "m+1");
@@ -5859,6 +5921,9 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
 
     const auto transitionWorkspace = monitor->m_activeWorkspace ? monitor->m_activeWorkspace : source.ownerWorkspace;
     const auto transitionAxis = workspaceSwipeUsesVerticalAxis(transitionWorkspace) ? WorkspaceTransitionAxis::Vertical : WorkspaceTransitionAxis::Horizontal;
+    const auto transitionFromName = transitionWorkspace ? transitionWorkspace->m_name : std::string{};
+    const auto transitionFromId = transitionWorkspace ? transitionWorkspace->m_id : WORKSPACE_INVALID;
+    const int  nameOrIdStep = workspaceStepFromNumericNamesOrIds(transitionFromName, transitionFromId, workspaceName, workspaceId);
 
     m_workspaceTransition = {
         .active = true,
@@ -5868,7 +5933,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
         .mode = mode,
         .distance = workspaceSwipeViewportDistance(monitor, transitionAxis),
         .delta = 0.0,
-        .step = workspaceId > transitionWorkspace->m_id ? 1 : -1,
+        .step = nameOrIdStep,
         .initialDirection = 0,
         .avgSpeed = 0.0,
         .speedPoints = 0,
@@ -5918,7 +5983,7 @@ bool OverviewController::beginExternalOverviewWorkspaceTransition(const PHLWORKS
     if (!monitor || !containsHandle(m_state.participatingMonitors, monitor) || monitor->m_activeWorkspace != workspace)
         return false;
 
-    int step = workspace->m_id > previousWorkspace->m_id ? 1 : -1;
+    int step = workspaceStepFromNumericNamesOrIds(previousWorkspace->m_name, previousWorkspace->m_id, workspace->m_name, workspace->m_id);
     if (shouldWrapWorkspaceIds(workspace->m_id, previousWorkspace->m_id))
         step = -step;
 
@@ -6203,25 +6268,10 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
     if (beginName.empty()) { bail("no begin name"); return; }
     if (!g_pKeybindManager || !g_pKeybindManager->m_dispatchers.contains("workspace")) { bail("no dispatcher"); return; }
 
-    // Only numerically-named workspaces participate (matches hypr-workspace-nav).
-    const auto parseSigned = [](const std::string& name, long& out) -> bool {
-        std::size_t start = (name[0] == '-') ? 1 : 0;
-        if (start == name.size())
-            return false;
-        for (std::size_t i = start; i < name.size(); ++i)
-            if (!std::isdigit(static_cast<unsigned char>(name[i])))
-                return false;
-        try {
-            out = std::stol(name);
-        } catch (const std::exception&) {
-            return false;
-        }
-        return true;
-    };
-
-    long current = 0;
-    if (!parseSigned(beginName, current))
+    const auto currentNumeric = parseNumericWorkspaceName(beginName);
+    if (!currentNumeric)
         return;
+    const long current = *currentNumeric;
 
     if (std::abs(rawTravel) < 0.0001) { bail("no travel"); return; }
     // The native swipe (workspace_swipe_use_r) can always create higher positive
@@ -6237,19 +6287,25 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
     if (!distanceCommit && !speedCommit)
         return;
 
-    // If the native swipe already moved to another workspace, it handled it.
+    const long target = current + step;
+    const std::string targetArg = numericWorkspaceDispatchArg(target);
+    const bool namedNumericStart = namedNumericWorkspaceNeedsNameSwipe(beginName);
+
+    // If the native swipe already moved, leave positive-id navigation alone.
+    // Named 0/negative swipes are owned here: native r+/-1 walks hashed ids, so
+    // a committed native neighbor is the wrong workspace and must be replaced.
     const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     const auto activeWorkspace = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
-    if (!activeWorkspace || activeWorkspace->m_name != beginName)
+    if (!namedNumericStart && (!activeWorkspace || activeWorkspace->m_name != beginName))
         return;
 
-    const long target = current + step;
     // The native swipe already covers moves that stay on positive workspaces; only
     // take over when starting from or stepping onto a 0/negative named workspace.
     if (current >= 1 && target >= 1)
         return;
 
-    const std::string targetArg = target >= 1 ? std::to_string(target) : ("name:" + std::to_string(target));
+    if (activeWorkspace && activeWorkspace->m_name == std::to_string(target))
+        return;
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] native workspace swipe boundary handoff begin=" << beginName << " step=" << step << " target=" << targetArg
@@ -11601,7 +11657,7 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
     const bool wantsSelectionRetarget =
         !draggingWindow && syncSelection && m_state.hoveredIndex && focusFollowsMouseEnabled() && allowSelectionRetarget &&
         (!m_state.selectedIndex || *m_state.hoveredIndex != *m_state.selectedIndex);
-    const bool immediateRetarget = wantsSelectionRetarget && syncRealFocus;
+    const bool immediateRetarget = wantsSelectionRetarget && (syncRealFocus || missionControlModeEnabled());
     const bool retargetBlockedByRelayout = expandSelectedWindowEnabled() && m_state.relayoutActive && !immediateRetarget;
     const bool retargetBlockedByCooldown = expandSelectedWindowEnabled() && now < m_hoverSelectionRetargetBlockedUntil && !immediateRetarget;
     bool retargetLocked = false;
@@ -14022,6 +14078,12 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             .newWorkspaceSlot = true,
             .active = false,
         });
+
+        if (monitorEntries.size() >= 2) {
+            std::stable_sort(monitorEntries.begin(), monitorEntries.end() - 1, [](const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) {
+                return numericWorkspaceNameLess(lhs.workspaceName, rhs.workspaceName);
+            });
+        }
 
         if (monitorEntries.empty())
             continue;

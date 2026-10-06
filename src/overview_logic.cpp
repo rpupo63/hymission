@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -766,6 +767,55 @@ double niriOverviewPreviewScale(const Rect& previewArea, const Rect& baseArea, d
 
 bool isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor) {
     return anchor == WorkspaceStripAnchor::Top;
+}
+
+std::optional<long> parseNumericWorkspaceName(std::string_view name) {
+    if (name.empty())
+        return std::nullopt;
+
+    const std::size_t start = name.front() == '-' ? 1 : 0;
+    if (start == name.size())
+        return std::nullopt;
+
+    for (std::size_t i = start; i < name.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(name[i])))
+            return std::nullopt;
+    }
+
+    try {
+        return std::stol(std::string(name));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+bool numericWorkspaceNameLess(std::string_view lhs, std::string_view rhs) {
+    const auto leftNumeric = parseNumericWorkspaceName(lhs);
+    const auto rightNumeric = parseNumericWorkspaceName(rhs);
+    if (leftNumeric && rightNumeric)
+        return *leftNumeric < *rightNumeric;
+    if (leftNumeric.has_value() != rightNumeric.has_value())
+        return leftNumeric.has_value();
+    return lhs < rhs;
+}
+
+bool namedNumericWorkspaceNeedsNameSwipe(std::string_view name) {
+    const auto numeric = parseNumericWorkspaceName(name);
+    return numeric && *numeric <= 0;
+}
+
+std::string numericWorkspaceDispatchArg(long name) {
+    if (name >= 1)
+        return std::to_string(name);
+    return "name:" + std::to_string(name);
+}
+
+int workspaceStepFromNumericNamesOrIds(std::string_view fromName, int64_t fromId, std::string_view toName, int64_t toId) {
+    const auto fromNumeric = parseNumericWorkspaceName(fromName);
+    const auto toNumeric = parseNumericWorkspaceName(toName);
+    if (fromNumeric && toNumeric && *fromNumeric != *toNumeric)
+        return *toNumeric > *fromNumeric ? 1 : -1;
+    return toId > fromId ? 1 : -1;
 }
 
 std::vector<int64_t> expandWorkspaceStripWorkspaceIds(const std::vector<int64_t>& workspaceIds, WorkspaceStripEmptyMode mode) {

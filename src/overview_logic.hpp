@@ -158,6 +158,11 @@ struct WorkspaceStripReservation {
 [[nodiscard]] double                   niriOverviewPreviewScale(const Rect& previewArea, const Rect& baseArea, double maxPreviewScale, double minSlotScale,
                                                                 std::optional<GestureAxis> overflowAxis = std::nullopt);
 [[nodiscard]] bool                 isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor);
+[[nodiscard]] std::optional<long>  parseNumericWorkspaceName(std::string_view name);
+[[nodiscard]] bool                 numericWorkspaceNameLess(std::string_view lhs, std::string_view rhs);
+[[nodiscard]] bool                 namedNumericWorkspaceNeedsNameSwipe(std::string_view name);
+[[nodiscard]] std::string          numericWorkspaceDispatchArg(long name);
+[[nodiscard]] int                  workspaceStepFromNumericNamesOrIds(std::string_view fromName, int64_t fromId, std::string_view toName, int64_t toId);
 [[nodiscard]] std::vector<int64_t> expandWorkspaceStripWorkspaceIds(const std::vector<int64_t>& workspaceIds, WorkspaceStripEmptyMode mode);
 [[nodiscard]] WorkspaceStripReservation reserveWorkspaceStripBand(const Rect& monitorArea, WorkspaceStripAnchor anchor, double thickness, double gap);
 [[nodiscard]] std::vector<Rect>    layoutWorkspaceStripSlots(const Rect& stripBand, WorkspaceStripAnchor anchor, std::size_t slotCount, double gap);
