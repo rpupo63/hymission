@@ -1,0 +1,23 @@
+---
+description: hymission is in-process Hyprland — read live ~/.config/hypr/ and ~/.config/omarchy/ before edits and when the user reports a bug
+alwaysApply: true
+---
+
+# Live Hyprland and Omarchy config coupling
+
+hymission is an in-process Hyprland plugin on Omarchy. Live compositor and
+desktop config are `~/.config/hypr/` and `~/.config/omarchy/`, not this repo.
+Read them before editing. Treat them as suspects on every bug report.
+Canonical write-up: `AGENTS.md`.
+
+```xml
+<rule id="hyprland-config-coupling">
+  <scope>Any hymission bug report, bugfix, behavior change, reload, or live-session test</scope>
+  <must>Before editing plugin source, read the live Hyprland and Omarchy config that can affect the same surface: ~/.config/hypr/ and ~/.config/omarchy/.</must>
+  <must>When the user reports a bug, consider those live configs first. Binds, gestures, workspace dispatches, theme reload, follow_mouse, animations, and omarchy hooks can conflict with or overwrite plugin behavior.</must>
+  <must>Check hymission-setup.conf, autostart.conf, hyprland.conf, bindings.conf, input.conf, looknfeel.conf, and ~/.config/omarchy/hooks/ when the change or bug can interact with them.</must>
+  <must>If a live Hyprland or Omarchy config file must change, use skill omarchy and edit ~/.config/hypr/ or ~/.config/omarchy/ — never ~/.local/share/omarchy/.</must>
+  <must_not>Start a hymission edit or bugfix from plugin source alone while skipping the live Hyprland and Omarchy config.</must_not>
+  <must_not>Treat a successful CMake build, or a plugin-source-only diff, as proof the live session will behave correctly.</must_not>
+</rule>
+```

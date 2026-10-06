@@ -8,9 +8,37 @@ unit, and no socket**. If you find yourself looking for one, there isn't one to 
 
 Fork of `wilf`'s hymission (`upstream` remote); `origin` is `rpupo63/hymission`.
 
+## Live Hyprland and Omarchy config is part of every bug and every edit
+
+This plugin runs **inside Hyprland** on Omarchy. It is not a sidecar. Plugin code
+intercepts gestures, can swallow `workspace` dispatches, and force-sets live
+compositor options via `setConfigKeyword`. The user's compositor and desktop
+config live **outside this repo**, in `~/.config/hypr/` and `~/.config/omarchy/`.
+Theme reloads, binds, gestures, and `omarchy-*` hooks can look like plugin bugs.
+
+Read those live files **before** editing plugin source. When the user reports a
+bug, treat Hyprland and Omarchy config as first-class suspects — not an
+afterthought after a plugin-only patch.
+
+```xml
+<rule id="hyprland-config-coupling">
+  <scope>Any hymission bug report, bugfix, behavior change, reload, or live-session test</scope>
+  <must>Before editing plugin source, read the live Hyprland and Omarchy config that can affect the same surface: ~/.config/hypr/ and ~/.config/omarchy/.</must>
+  <must>When the user reports a bug, consider those live configs first. Binds, gestures, workspace dispatches, theme reload, follow_mouse, animations, and omarchy hooks can conflict with or overwrite plugin behavior.</must>
+  <must>Check hymission-setup.conf (plugin block, SUPER+grave bind), autostart.conf (hymission-load; also runs on omarchy theme reload), hyprland.conf (plugin permission), bindings.conf (workspace/overview binds), input.conf (gestures, scale: token order, natural_scroll), looknfeel.conf (workspace animations), and ~/.config/omarchy/hooks/ when the change or bug can interact with them.</must>
+  <must>Confirm the plugin is not permanently overwriting a user option (setConfigKeyword / input:follow_mouse / animations:enabled / scrolling:follow_focus) unless that override is documented and restored.</must>
+  <must>Confirm a new plugin behavior does not conflict with an existing bind, gesture, or workspace dispatch already defined in ~/.config/hypr/.</must>
+  <must>If a live Hyprland or Omarchy config file must change, use skill omarchy and edit ~/.config/hypr/ or ~/.config/omarchy/ — never ~/.local/share/omarchy/.</must>
+  <must_not>Start a hymission edit or bugfix from plugin source alone while skipping the live Hyprland and Omarchy config.</must_not>
+  <must_not>Treat a successful CMake build, or a plugin-source-only diff, as proof the live session will behave correctly.</must_not>
+  <must_not>Add plugin permissions, binds, or plugin { hymission { } } blocks to a statically sourced Hyprland file that parses before the plugin is loaded.</must_not>
+  <ref>Known hazard: global options the plugin mutates; Config coupling worth knowing before you change anything; skill omarchy</ref>
+</rule>
+```
+
 ## How it is actually loaded on this machine
 
-**Not by hyprpm.** As of 2026-08-13 `hyprpm list` is empty and `~/.local/share/hyprpm/`
+**Not by hyprpm.** On this machine `hyprpm list` is empty and `~/.local/share/hyprpm/`
 does not exist. The load path is `exec = ~/.config/hypr/scripts/hymission-load` in
 `~/.config/hypr/autostart.conf`, which runs at startup *and* on every config reload:
 
@@ -25,8 +53,8 @@ boot two copies overlap. When the guards were inline `||` checks, both copies sa
 binds and both sourced the file: two `SUPER+grave` binds, and two copies of
 `gesture = 3, vertical, dispatcher, hymission:toggle`, which makes a 3-finger vertical
 swipe toggle the overview twice and look dead. A warm `hyprctl reload` never reproduces
-it — the two calls are far enough apart that check-then-act works. Diagnosed on the
-2026-08-13 reboot, after the warm-session test said the config was fine.
+it — the two calls are far enough apart that check-then-act works. Diagnosed on a
+cold boot, after the warm-session test said the config was fine.
 
 `unbind` would not have been enough: Hyprland has no unbind for `gesture`, and
 `hyprctl gestures` returns `unknown request`, so the doubled gesture is neither
@@ -39,15 +67,15 @@ Hyprland parses those before the plugin exists and rejects the unknown keywords.
 
 `~/.config/hypr/hyprland.conf` grants exactly one `permission = … plugin, allow`, for the
 `build-cmake/` path above. Adding a grant for a path with no `.so` behind it is how you end
-up authorizing an abandoned binary — two such grants were removed on 2026-08-13.
+up authorizing an abandoned binary — two such grants were removed after that incident.
 
 > Previous versions of this file claimed hyprpm managed this repo as a local source, and
 > that the active config lived in `~/.config/HyprV/hypr/hyprland-plugins.conf`. Both were
-> false here — that path does not exist on this machine. Corrected 2026-08-13.
+> false here — that path does not exist on this machine. Corrected after that incident.
 
 ## Building
 
-CMake only. `meson.build` was removed 2026-08-13 (never built here). `hyprpm.toml` exists
+CMake only. `meson.build` was removed (never built here). `hyprpm.toml` exists
 but is unused; it shells out to the same CMake build and writes to the same
 `build-cmake/libhymission.so`.
 
@@ -94,7 +122,7 @@ into the command must stay shell-quoted (`shellQuote` in `notify_mirror.cpp`).
 
 The plugin force-sets global Hyprland options via `setConfigKeyword`
 (`src/overview_controller.cpp:450-464`), which falls back to synthesizing Lua and `eval`ing
-it when `hyprctl keyword` refuses. Measured live against the 0.5.0 build on 2026-08-13:
+it when `hyprctl keyword` refuses. Measured live against the 0.5.0 build:
 
 | Option | Scope of the override | Restored by | Site |
 |---|---|---|---|
@@ -127,7 +155,7 @@ wrong, in opposite directions. What is actually true, measured against the 0.5.0
   would let whatever the cursor happens to be sitting over immediately steal that focus
   back. So the override is held and discharged on the next real pointer event — `:2848`
   (`handleMouseMove`, after `m_ignorePostCloseMouseMoveCount` counts down) or `:2896`
-  (`handleMouseButton`). Verified 2026-08-13: toggle open → `0`, toggle closed → still
+  (`handleMouseButton`). Verified: toggle open → `0`, toggle closed → still
   `0`, jiggle the mouse → back to `1`.
 
   **This is why black-box testing it lies.** Driving the overview with
@@ -154,6 +182,11 @@ Two asymmetries worth knowing if you ever touch this code:
   the niri support that is a deletion candidate anyway.
 
 ## Config coupling worth knowing before you change anything
+
+See **Live Hyprland and Omarchy config is part of every bug and every edit** —
+these are the known load-bearing couplings, not an exhaustive list. Re-read the
+live `~/.config/hypr/` and `~/.config/omarchy/` files for the surface you are
+changing or debugging.
 
 - **`only_active_workspace = 1` is load-bearing well beyond the overview.** Setting it to
   `0` makes the plugin silently swallow every `workspace` dispatch while the overview is
