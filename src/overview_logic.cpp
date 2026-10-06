@@ -818,6 +818,20 @@ int workspaceStepFromNumericNamesOrIds(std::string_view fromName, int64_t fromId
     return toId > fromId ? 1 : -1;
 }
 
+std::vector<long> workspaceStripNeighborNames(const std::vector<long>& inUseNames) {
+    std::vector<long> neighbors;
+    neighbors.reserve(inUseNames.size() * 2);
+    for (const long name : inUseNames) {
+        neighbors.push_back(name - 1);
+        neighbors.push_back(name + 1);
+    }
+
+    std::sort(neighbors.begin(), neighbors.end());
+    neighbors.erase(std::unique(neighbors.begin(), neighbors.end()), neighbors.end());
+    std::erase_if(neighbors, [&](long name) { return std::find(inUseNames.begin(), inUseNames.end(), name) != inUseNames.end(); });
+    return neighbors;
+}
+
 std::vector<int64_t> expandWorkspaceStripWorkspaceIds(const std::vector<int64_t>& workspaceIds, WorkspaceStripEmptyMode mode) {
     std::vector<int64_t> sortedIds = workspaceIds;
     std::sort(sortedIds.begin(), sortedIds.end());

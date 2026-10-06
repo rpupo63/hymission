@@ -364,6 +364,11 @@ int main() {
                      "name-order step from -1 to 0 should move up one workspace");
     }
 
+    ok &= expect(workspaceStripNeighborNames({0}) == std::vector<long>({-1, 1}), "a window on workspace 0 should show -1 and 1");
+    ok &= expect(workspaceStripNeighborNames({1, 2, 5}) == std::vector<long>({0, 3, 4, 6}),
+                 "neighbors should skip in-use workspaces and not duplicate a shared neighbor");
+    ok &= expect(workspaceStripNeighborNames({}).empty(), "no in-use workspaces should add no neighbors");
+
     ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Top, 40, 12),
                             {
                                 {10, 20, 300, 40},

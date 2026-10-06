@@ -163,6 +163,7 @@ struct WorkspaceStripReservation {
 [[nodiscard]] bool                 namedNumericWorkspaceNeedsNameSwipe(std::string_view name);
 [[nodiscard]] std::string          numericWorkspaceDispatchArg(long name);
 [[nodiscard]] int                  workspaceStepFromNumericNamesOrIds(std::string_view fromName, int64_t fromId, std::string_view toName, int64_t toId);
+[[nodiscard]] std::vector<long>    workspaceStripNeighborNames(const std::vector<long>& inUseNames);
 [[nodiscard]] std::vector<int64_t> expandWorkspaceStripWorkspaceIds(const std::vector<int64_t>& workspaceIds, WorkspaceStripEmptyMode mode);
 [[nodiscard]] WorkspaceStripReservation reserveWorkspaceStripBand(const Rect& monitorArea, WorkspaceStripAnchor anchor, double thickness, double gap);
 [[nodiscard]] std::vector<Rect>    layoutWorkspaceStripSlots(const Rect& stripBand, WorkspaceStripAnchor anchor, std::size_t slotCount, double gap);

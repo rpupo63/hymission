@@ -83,10 +83,11 @@ class OverviewController {
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
     void                          updateOverviewWorkspaceSwipeGesture(double delta);
     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
-    // Active workspace name on the monitor under the cursor, for native-swipe boundary handoff.
-    [[nodiscard]] std::string     activeWorkspaceNameForSwipe() const;
+    // Name of the active workspace under the cursor when it has a hashed (negative)
+    // id from `name:`; empty otherwise, so positive-id swipes stay fully native.
+    [[nodiscard]] std::string     hashedWorkspaceNameForSwipe() const;
     // When the native (Hyprland) workspace swipe runs while the overview is closed it
-    // orders by hashed workspace id. Named 0/negative workspaces are stepped by name.
+    // orders by hashed workspace id. Hashed-id 0/negative workspaces are stepped by name.
     void                          handleNativeWorkspaceSwipeBoundary(const std::string& beginName, double rawTravel, double lastFrame, bool cancelled);
     [[nodiscard]] bool            beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction,
                                                      const IPointer::SSwipeUpdateEvent& event, float deltaScale);

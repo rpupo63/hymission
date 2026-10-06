@@ -1834,6 +1834,30 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
     bool                              m_tracking = false;
 };
 
+// bindings.conf gives numbered workspaces real ids (`workspace = 10, defaultName:0`),
+// so 0 and negatives no longer need hashed `name:` ids. Map through those rules.
+static std::optional<WORKSPACEID> ruleWorkspaceIdForName(const std::string& name) {
+    for (const auto& rule : Config::workspaceRuleMgr()->getAllWorkspaceRules()) {
+        if (rule && rule->m_workspaceId > 0 && rule->m_defaultName == name)
+            return rule->m_workspaceId;
+    }
+    return std::nullopt;
+}
+
+static std::optional<std::string> ruleDefaultNameForId(WORKSPACEID id) {
+    for (const auto& rule : Config::workspaceRuleMgr()->getAllWorkspaceRules()) {
+        if (rule && rule->m_workspaceId == id && rule->m_defaultName)
+            return rule->m_defaultName;
+    }
+    return std::nullopt;
+}
+
+static std::string numericWorkspaceTargetArg(long name) {
+    if (const auto id = ruleWorkspaceIdForName(std::to_string(name)))
+        return std::to_string(*id);
+    return numericWorkspaceDispatchArg(name);
+}
+
 class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
   public:
     CHymissionWorkspaceTrackpadGesture(eTrackpadGestureDirection direction, float)
@@ -1844,7 +1868,7 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
         m_mode = Mode::Native;
         m_nativeRawTravel = 0.0;
         m_nativeLastFrame = 0.0;
-        m_nativeBeginWsName = g_controller ? g_controller->activeWorkspaceNameForSwipe() : std::string{};
+        m_nativeBeginWsName = g_controller ? g_controller->hashedWorkspaceNameForSwipe() : std::string{};
 
         if (!g_controller || !e.swipe) {
             m_nativeGesture.begin(e);
@@ -4961,9 +4985,9 @@ bool OverviewController::resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& 
         return false;
 
     const auto currentNumeric = parseNumericWorkspaceName(monitor->m_activeWorkspace->m_name);
-    if (currentNumeric && *currentNumeric <= 0) {
+    if (currentNumeric && *currentNumeric <= 0 && monitor->m_activeWorkspace->m_id < 0) {
         const long        target = *currentNumeric + (step < 0 ? -1 : 1);
-        const std::string targetArg = numericWorkspaceDispatchArg(target);
+        const std::string targetArg = numericWorkspaceTargetArg(target);
         auto              resolved = getWorkspaceIDNameFromString(targetArg);
         workspace = ::State::workspaceState()->query().id(resolved.id).run();
         if (!workspace) {
@@ -4999,8 +5023,8 @@ bool OverviewController::resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& 
         return false;
 
     workspaceId = resolved.id;
-    workspaceName = resolved.name;
     workspace = ::State::workspaceState()->query().id(workspaceId).run();
+    workspaceName = workspace ? resolved.name : ruleDefaultNameForId(workspaceId).value_or(resolved.name);
 
     if (step > 0 && gestureSwipeCreateNewEnabled() && (workspaceId <= monitor->m_activeWorkspace->m_id || !workspace)) {
         auto createTarget = getWorkspaceIDNameFromString("r+1");
@@ -6246,9 +6270,10 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
     activateStripTargetByStep(lockedStep);
 }
 
-std::string OverviewController::activeWorkspaceNameForSwipe() const {
+std::string OverviewController::hashedWorkspaceNameForSwipe() const {
     const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
-    if (!monitor || !monitor->m_activeWorkspace)
+    // Positive ids (including rule-named 0/negatives) step correctly natively.
+    if (!monitor || !monitor->m_activeWorkspace || monitor->m_activeWorkspace->m_id >= 0)
         return {};
     return monitor->m_activeWorkspace->m_name;
 }
@@ -6274,11 +6299,9 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
     const long current = *currentNumeric;
 
     if (std::abs(rawTravel) < 0.0001) { bail("no travel"); return; }
-    // The native swipe (workspace_swipe_use_r) can always create higher positive
-    // workspaces, so it only gets "stuck" at the positive lower edge -> a stuck
-    // swipe from a positive workspace unambiguously means "go lower". On named
-    // 0/negative workspaces, use the travel sign (observed: lower == positive travel).
-    const int step = (current >= 1) ? -1 : (rawTravel > 0.0 ? -1 : 1);
+    // beginName is only set on hashed-id workspaces (native swipe was skipped), so
+    // the travel sign is the only direction signal (observed: lower == positive travel).
+    const int step = rawTravel > 0.0 ? -1 : 1;
 
     const double commitDistanceThreshold = overviewWorkspaceSwipeCommitDistance();
     const double speedThreshold = gestureForceSpeedThreshold();
@@ -6288,22 +6311,10 @@ void OverviewController::handleNativeWorkspaceSwipeBoundary(const std::string& b
         return;
 
     const long target = current + step;
-    const std::string targetArg = numericWorkspaceDispatchArg(target);
-    const bool namedNumericStart = namedNumericWorkspaceNeedsNameSwipe(beginName);
+    const std::string targetArg = numericWorkspaceTargetArg(target);
 
-    // If the native swipe already moved, leave positive-id navigation alone.
-    // Named 0/negative swipes are owned here: native r+/-1 walks hashed ids, so
-    // a committed native neighbor is the wrong workspace and must be replaced.
     const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     const auto activeWorkspace = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
-    if (!namedNumericStart && (!activeWorkspace || activeWorkspace->m_name != beginName))
-        return;
-
-    // The native swipe already covers moves that stay on positive workspaces; only
-    // take over when starting from or stepping onto a 0/negative named workspace.
-    if (current >= 1 && target >= 1)
-        return;
-
     if (activeWorkspace && activeWorkspace->m_name == std::to_string(target))
         return;
     if (debugLogsEnabled()) {
@@ -12600,7 +12611,7 @@ bool OverviewController::workspaceStripEntriesMatchForSnapshot(const WorkspaceSt
     if (lhs.newWorkspaceSlot != rhs.newWorkspaceSlot)
         return false;
 
-    if (lhs.workspaceId != rhs.workspaceId)
+    if (lhs.workspaceId != rhs.workspaceId || lhs.workspaceName != rhs.workspaceName)
         return false;
 
     if (lhs.newWorkspaceSlot)
@@ -13997,6 +14008,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
         return monitor->m_activeWorkspace;
     };
 
+    WORKSPACEID namedNeighborCount = 0;
     for (const auto& monitor : state.participatingMonitors) {
         if (!monitor)
             continue;
@@ -14057,7 +14069,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
                     .monitor = monitor,
                     .workspace = {},
                     .workspaceId = workspaceId,
-                    .workspaceName = std::to_string(workspaceId),
+                    .workspaceName = ruleDefaultNameForId(workspaceId).value_or(std::to_string(workspaceId)),
                     .syntheticEmpty = true,
                     .newWorkspaceSlot = false,
                     .active = false,
@@ -14065,25 +14077,48 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             }
         }
 
-        WORKSPACEID nextWorkspaceId = stripWorkspaceIds.empty() ? 1 : static_cast<WORKSPACEID>(std::max<int64_t>(stripWorkspaceIds.back(), 0) + 1);
-        while (::State::workspaceState()->query().id(nextWorkspaceId).run())
-            ++nextWorkspaceId;
+        // Every in-use numbered workspace gets an empty slot on each side, so a
+        // window on 0 shows -1 and 1. This replaces the single trailing "+" slot.
+        std::vector<long> inUseNames;
+        for (const auto& entry : monitorEntries) {
+            if (const auto numeric = parseNumericWorkspaceName(entry.workspaceName))
+                inUseNames.push_back(*numeric);
+        }
 
-        monitorEntries.push_back({
-            .monitor = monitor,
-            .workspace = {},
-            .workspaceId = nextWorkspaceId,
-            .workspaceName = std::to_string(nextWorkspaceId),
-            .syntheticEmpty = true,
-            .newWorkspaceSlot = true,
-            .active = false,
-        });
+        for (const long name : workspaceStripNeighborNames(inUseNames)) {
+            const std::string workspaceName = std::to_string(name);
+            // A neighbor that exists on another monitor belongs to that monitor.
+            if (::State::workspaceState()->query().name(workspaceName).run())
+                continue;
 
-        if (monitorEntries.size() >= 2) {
-            std::stable_sort(monitorEntries.begin(), monitorEntries.end() - 1, [](const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) {
-                return numericWorkspaceNameLess(lhs.workspaceName, rhs.workspaceName);
+            WORKSPACEID workspaceId = name;
+            if (const auto ruleId = ruleWorkspaceIdForName(workspaceName)) {
+                workspaceId = *ruleId;
+                const bool listed = std::ranges::any_of(monitorEntries, [&](const WorkspaceStripEntry& entry) { return entry.workspaceId == workspaceId; });
+                if (listed || ::State::workspaceState()->query().id(workspaceId).run())
+                    continue;
+            } else if (name < 1) {
+                // Named 0/negative workspaces get hashed ids. Hyprland would hand
+                // every missing name the same next free id, so step past it.
+                workspaceId = getWorkspaceIDNameFromString(numericWorkspaceDispatchArg(name)).id - namedNeighborCount++;
+            } else if (::State::workspaceState()->query().id(workspaceId).run()) {
+                continue;
+            }
+
+            monitorEntries.push_back({
+                .monitor = monitor,
+                .workspace = {},
+                .workspaceId = workspaceId,
+                .workspaceName = workspaceName,
+                .syntheticEmpty = true,
+                .newWorkspaceSlot = false,
+                .active = false,
             });
         }
+
+        std::stable_sort(monitorEntries.begin(), monitorEntries.end(), [](const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) {
+            return numericWorkspaceNameLess(lhs.workspaceName, rhs.workspaceName);
+        });
 
         if (monitorEntries.empty())
             continue;
