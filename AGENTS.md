@@ -91,16 +91,39 @@ Hyprland's notification overlay is render-only: it takes no input, keeps no hist
 writes nothing to `hyprland.log` or socket2. Verified on 0.56.2 —
 `src/notification/NotificationOverlay.cpp` registers one listener (`monitor.focused`) for
 damage and nothing else, so a click never reaches a notification and a timed-out one is
-unrecoverable. Every plugin notification is therefore also sent to the desktop daemon
-(swaync here) by `src/notify_mirror.cpp`.
+unrecoverable. Notifications are therefore also sent to the desktop daemon (swaync here)
+by `src/notify_mirror.cpp`, which has two halves.
 
-Two chokepoints feed it. New notifications must go through one of them, not through
-`HyprlandAPI::addNotification` directly:
+**Half one — the plugin's own notifications.** Two chokepoints feed it. New notifications
+must go through one of them, not through `HyprlandAPI::addNotification` directly:
 
 - `OverviewController::notify` — controller notifications. Urgency is inferred from the
   color: `r > 0.9 && g < 0.3` means failure, which maps to `-u critical` so swaync holds
   it until dismissed.
 - `notifyFailure` in `main.cpp` — every plugin-init failure. Always critical.
+
+**Half two — Hyprland's own notifications**, which never pass through this plugin and
+never reach D-Bus either. `CCompositor::performUserChecks()` and the monitor code call
+`Notification::overlay()->addNotification` directly, so the banners that matter most —
+the `.conf`-removed-in-0.57 deadline, a rejected monitor scale, a missing watchdog, failed
+assets — were simply lost when their 15s timer ran out. `startOverlayMirror()` polls
+`Notification::overlay()->getNotifications()` every 500ms and mirrors anything new under
+app name `Hyprland`. It is started last in `PLUGIN_INIT` and torn down in `PLUGIN_EXIT`.
+
+Three things about that half are load-bearing:
+
+- **Urgency comes from the icon, not only the color.** `ICON_ERROR` or a red banner maps to
+  `-u critical`; everything else is `normal` and still persists in swaync's control center.
+  Hyprland's plain warnings use `CHyprColor{}` (all zeros), so a colour-only rule would
+  have read them as non-failures.
+- **Seen notifications are tracked by `WP<CNotification>`, not by text.** Weak, so tracking
+  never keeps a banner alive past its own timer; by identity, so a genuine repeat of the
+  same message still mirrors.
+- **`mirrorNotification` claims its own overlay entry** by finding the matching text and
+  marking it seen, so half one and half two never double-send. It deliberately claims *one*
+  matching entry rather than snapshotting the overlay — snapshotting would swallow an
+  unmirrored Hyprland banner that happened to be on screen at the same moment. Verified
+  live: one `hymission:debug_current_layout` produces exactly one D-Bus `Notify`.
 
 **Upgrade hazard:** the mirror spawns via `Config::Supplementary::executor()->spawnRaw()`
 (`config/supplementary/executor/Executor.hpp`), an *internal* Hyprland API, not

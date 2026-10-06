@@ -467,6 +467,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         notifyFailure("[hymission] reloadConfig failed");
     }
 
+    // Start last: anything already on the overlay, including Hyprland's own login
+    // banners and any failure notified above, is mirrored on the first tick.
+    hymission::startOverlayMirror();
+
     return {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
@@ -476,6 +480,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    hymission::stopOverlayMirror();
+
     if (g_overviewStateCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_overviewStateCommand);
         g_overviewStateCommand.reset();
