@@ -36,6 +36,7 @@ add_library(hymission SHARED
   src/overview_logic.cpp
   src/overview_controller.cpp
   src/app_icon.cpp
+  src/notify_mirror.cpp
 )
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS} ${APP_ICON_DEPS_INCLUDE_DIRS})

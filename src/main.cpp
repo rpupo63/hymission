@@ -14,6 +14,7 @@ extern "C" {
 #include <lua.h>
 }
 
+#include "notify_mirror.hpp"
 #include "overview_controller.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
@@ -23,17 +24,20 @@ inline SP<SHyprCtlCommand> g_rawWindowRenderCommand;
 inline SP<SHyprCtlCommand> g_captureInputCommand;
 
 namespace {
+// Failures all notify the same way: red, 5s on the overlay, and mirrored to the
+// desktop daemon so the text outlives it.
+void notifyFailure(const std::string& message) {
+    HyprlandAPI::addNotification(g_pluginHandle, message, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+    hymission::mirrorNotification(message, true);
+}
+
 bool addConfigValue(SP<Config::Values::IValue> value) {
     const std::string name = value->name();
 
     if (HyprlandAPI::addConfigValueV2(g_pluginHandle, value))
         return true;
 
-    HyprlandAPI::addNotification(
-        g_pluginHandle,
-        "[hymission] failed to register config value " + name,
-        CHyprColor(1.0, 0.2, 0.2, 1.0),
-        5000);
+    notifyFailure("[hymission] failed to register config value " + name);
     return false;
 }
 
@@ -403,12 +407,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
     if (!g_overviewController->initialize()) {
-        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to initialize overview controller", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        notifyFailure("[hymission] failed to initialize overview controller");
     }
 
     const auto registerDispatcher = [&](const char* name, auto handler) {
         if (!HyprlandAPI::addDispatcherV2(g_pluginHandle, name, handler)) {
-            HyprlandAPI::addNotification(g_pluginHandle, std::string("[hymission] failed to register dispatcher ") + name, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+            notifyFailure(std::string("[hymission] failed to register dispatcher ") + name);
         }
     };
 
@@ -423,8 +427,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .fn = hyprctlOverviewState,
     });
     if (!g_overviewStateCommand)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-overview-state",
-                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        notifyFailure("[hymission] failed to register hyprctl command hymission-overview-state");
 
     g_rawWindowRenderCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
         .name = "hymission-raw-window-render",
@@ -432,8 +435,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .fn = hyprctlRawWindowRender,
     });
     if (!g_rawWindowRenderCommand)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-raw-window-render",
-                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        notifyFailure("[hymission] failed to register hyprctl command hymission-raw-window-render");
 
     g_captureInputCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
         .name = "hymission-capture-input",
@@ -441,17 +443,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .fn = hyprctlCaptureInput,
     });
     if (!g_captureInputCommand)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-capture-input",
-                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        notifyFailure("[hymission] failed to register hyprctl command hymission-capture-input");
 
     if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
         const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
             if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
-                HyprlandAPI::addNotification(
-                    g_pluginHandle,
-                    std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
-                    CHyprColor(1.0, 0.2, 0.2, 1.0),
-                    5000);
+                notifyFailure(std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name);
             }
         };
 
@@ -465,7 +462,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     }
 
     if (!HyprlandAPI::reloadConfig()) {
-        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        notifyFailure("[hymission] reloadConfig failed");
     }
 
     return {

@@ -1,4 +1,5 @@
 #include "overview_controller.hpp"
+#include "notify_mirror.hpp"
 
 #include <algorithm>
 #include <any>
@@ -12301,6 +12302,8 @@ void OverviewController::syncFocusDuringOverviewToOwnerWorkspace(const char* sou
 
 void OverviewController::notify(const std::string& message, const CHyprColor& color, float durationMs) const {
     HyprlandAPI::addNotification(m_handle, message, color, durationMs);
+    // Every failure in this plugin notifies in the same red; the rest are informational.
+    mirrorNotification(message, color.r > 0.9 && color.g < 0.3);
 }
 
 void OverviewController::debugLog(const std::string& message) const {

@@ -57,6 +57,29 @@ Builds against the **stock** `hyprland` package headers in `/usr/include/hyprlan
 **Nothing rebuilds the plugin when Hyprland updates.** That is what broke it on the
 0.55 → 0.56 bump. Rebuild by hand after every Hyprland upgrade, or migrate to hyprpm.
 
+## Notifications are mirrored to the desktop daemon
+
+Hyprland's notification overlay is render-only: it takes no input, keeps no history, and
+writes nothing to `hyprland.log` or socket2. Verified on 0.56.2 —
+`src/notification/NotificationOverlay.cpp` registers one listener (`monitor.focused`) for
+damage and nothing else, so a click never reaches a notification and a timed-out one is
+unrecoverable. Every plugin notification is therefore also sent to the desktop daemon
+(swaync here) by `src/notify_mirror.cpp`.
+
+Two chokepoints feed it. New notifications must go through one of them, not through
+`HyprlandAPI::addNotification` directly:
+
+- `OverviewController::notify` — controller notifications. Urgency is inferred from the
+  color: `r > 0.9 && g < 0.3` means failure, which maps to `-u critical` so swaync holds
+  it until dismissed.
+- `notifyFailure` in `main.cpp` — every plugin-init failure. Always critical.
+
+**Upgrade hazard:** the mirror spawns via `Config::Supplementary::executor()->spawnRaw()`
+(`config/supplementary/executor/Executor.hpp`), an *internal* Hyprland API, not
+`PluginAPI.hpp`. It can move or disappear on any Hyprland bump, so check it alongside the
+rebuild above. `spawnRaw` ends in `execl("/bin/sh", "-c", args)`, so anything interpolated
+into the command must stay shell-quoted (`shellQuote` in `notify_mirror.cpp`).
+
 ## Reload safety
 
 - Treat `hyprpm update` as a **live plugin reload, not just a build step. It can
