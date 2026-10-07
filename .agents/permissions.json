@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repo": "rpupo63/hymission",
-  "updated_at": "2026-08-08T02:30:23Z",
+  "updated_at": "2026-10-06T20:08:36Z",
   "allow": [
     "Bash(echo \"exit: $?\")",
     "Bash(git -C /tmp/hymission-dev log --oneline -5)",
